@@ -17,6 +17,7 @@
 !README.md
 !LICENSE
 !.quickopen.json
+!requirements.txt
 !*.ps1
 !src/*.py
 !src/*.md

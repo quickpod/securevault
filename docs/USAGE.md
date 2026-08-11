@@ -5,13 +5,16 @@ This is the long-form guide. For a one-page overview see the top-level
 
 - [The vault](#the-vault)
   - [Creating a vault](#creating-a-vault)
+  - [Choosing & switching the vault location](#choosing--switching-the-vault-location)
   - [The three-factor unlock](#the-three-factor-unlock)
   - [TOTP enrollment](#totp-enrollment)
   - [Everyday file use](#everyday-file-use)
   - [Opening files in place](#opening-files-in-place)
   - [The password manager](#the-password-manager)
+  - [Import passwords from your browser](#import-passwords-from-your-browser)
   - [Command line](#command-line)
 - [Browser autofill setup](#browser-autofill-setup)
+  - [The setup wizard (recommended)](#the-setup-wizard-recommended)
 - [The Windows hardening scripts](#the-windows-hardening-scripts)
 - [Uninstall](#uninstall)
 
@@ -35,10 +38,39 @@ authenticator app right away (see [TOTP enrollment](#totp-enrollment)).
 > with scrypt into the key. Nothing reversible is written to disk. Write your password +
 > PIN down somewhere safe and offline, and keep a copy of the TOTP secret.
 
-The container lives in `SecureVault.dat`. By default it sits next to the program; override
-with the `SECUREVAULT_DAT` environment variable. Recovery aid: setting
-`SECUREVAULT_TOTP_SECRET` when creating a vault seeds a known TOTP secret instead of a
-random one, so you can re-enroll the same code on a new device.
+The container lives in `SecureVault.dat`. You choose **where** (see the next section);
+recovery aid: setting `SECUREVAULT_TOTP_SECRET` when creating a vault seeds a known TOTP
+secret instead of a random one, so you can re-enroll the same code on a new device.
+
+### Choosing & switching the vault location
+
+The vault file can live **anywhere** - a synced/backup folder, an external drive, wherever
+you like - and SecureVault remembers your choice between runs.
+
+- **First launch (GUI):** if a previously-used vault still exists, it opens straight away.
+  Otherwise a small chooser appears with **Create new vault...** (pick a location and name,
+  default `SecureVault.dat`) or **Open existing vault...**, plus a short **Recent vaults**
+  list.
+- **Switching vaults (GUI):** the **File** menu has **New Vault...**, **Open Vault...** and
+  **Open Recent**. Choosing one re-locks the current vault (wiping anything decrypted
+  outside it, after warning about unsaved edits) and reopens the window on the new one. The
+  current vault's path is shown in the window title.
+- **Command line:** every command accepts an optional **`--dat <path>`** (alias
+  **`--vault <path>`**), which takes precedence over everything else:
+
+  ```
+  SecureVault.exe --dat D:\Vaults\Work.dat list
+  SecureVault.exe init --vault "E:\Backup\SecureVault.dat"
+  ```
+
+**Precedence**, highest first: `--dat`/`--vault` -> the `SECUREVAULT_DAT` environment
+variable -> the last-used vault remembered from a previous run (if the file still exists) ->
+the default `SecureVault.dat` next to the program.
+
+> **Where the "remembered" location is stored:** a tiny, **non-secret** settings file at
+> `%LOCALAPPDATA%\SecureVault\config.json`. It holds only **paths** (the last-used vault and
+> a short recent list) - never a password, PIN, TOTP secret, or key. Deleting it just makes
+> the app ask which vault to open next time; it never touches your `.dat`.
 
 ### The three-factor unlock
 
@@ -136,6 +168,37 @@ prompt). The whole password database is stored as **one encrypted entry** inside
 
 Passwords keep a **history** (up to 10 prior values) so a rotation doesn't lose the old one.
 
+### Import passwords from your browser
+
+**Tools -> Import passwords from browser...** opens a guided wizard that pulls your saved
+logins out of Chrome / Edge / Brave and into the vault. It runs against the **already-open,
+unlocked** vault (open a vault first). The steps:
+
+1. **Export instructions.** Pick your browser and follow the exact export steps:
+   - **Chrome:** `chrome://password-manager/settings` -> **Settings** -> **Export passwords**
+     -> confirm with your Windows account -> save the CSV.
+   - **Edge:** `edge://wallet/passwords/settings` (or **Settings -> Profiles -> Passwords**)
+     -> **Export passwords** -> save the CSV.
+   - **Brave:** `brave://settings/passwords` -> **Export passwords** -> save the CSV.
+
+   > **The exported CSV is PLAINTEXT.** Save it to a folder only your Windows account can
+   > read; **never** onto a removable/network drive or a synced folder (OneDrive/Dropbox).
+   > The wizard securely shreds it after importing.
+
+2. **Pick the CSV.** A file picker (`.csv` filter). The wizard then shows a summary - how
+   many credentials were found and a small sample of **titles/usernames/domains only**
+   (never passwords) - plus how many rows look blank/skippable.
+3. **Import.** Choose whether to **skip duplicates** (same username on the same domain;
+   on by default), then import. It reports how many were added and how many skipped.
+4. **Shred.** Securely delete the plaintext CSV (checked by default). If you exported into a
+   synced folder, remember to purge it there **and** empty the online trash.
+5. **Done.** Imported logins are tagged **`chrome-import`** so you can find and review them
+   in the password manager (and run **Audit...** to catch reused/weak entries).
+
+The same thing is available from the password manager's **Import Chrome CSV...** button and
+from the CLI (`pw import-chrome`); the wizard just walks you through the export and shred
+around it.
+
 ### Command line
 
 The same `SecureVault.exe` (or `py src\sv_app.py <args>`) is also a CLI:
@@ -157,7 +220,13 @@ SecureVault.exe shellstatus                # is it installed, and pointing where
 
 SecureVault.exe pw <list|show|reveal|copy|add|edit|rm|gen|totp|audit|import-chrome> ...
 SecureVault.exe scan                       # heuristic keylogger/monitoring scan
+
+SecureVault.exe --dat <path>  <cmd> ...     # use a specific vault (alias --vault)
 ```
+
+`--dat`/`--vault` may appear anywhere on the line and applies to every command (including
+`init`), overriding `SECUREVAULT_DAT`, the remembered location, and the default. See
+[Choosing & switching the vault location](#choosing--switching-the-vault-location).
 
 For scripting, `SECUREVAULT_PW` / `SECUREVAULT_PIN` / `SECUREVAULT_TOTP` can supply the
 factors (avoid on shared machines). The **Explorer right-click menu** is registered per-user
@@ -171,6 +240,29 @@ Windows, or resetting your profile, and it repoints every verb.
 Autofill is **local-only**: the Chrome/Edge MV3 extension talks to a native-messaging host,
 which relays over a Windows named pipe to the **running, unlocked** vault. The host holds no
 keys and can decrypt nothing; if the app is closed or locked, every request fails.
+
+### The setup wizard (recommended)
+
+Rather than run the steps below by hand, use **Tools -> Set up browser autofill...** (also
+offered right after you create a new vault). The wizard:
+
+1. **Explains** that autofill is local-only and works only while the vault is open+unlocked.
+2. **Detects** installed Chromium browsers (Chrome, Edge, Brave) and lets you tick which to
+   set up (found ones ticked by default; you can proceed even if none are detected).
+3. **Installs the bridge** - runs the same key/ID + file generation as step 1 below, then
+   registers the native host (HKCU) and, if elevated, allowlists the extension (HKLM policy).
+   A single browser failing is reported inline and never aborts the rest.
+4. **Guides loading** the unpacked extension (with an **Open extension folder** button and a
+   **Copy** button for the path, since browsers can't be scripted into "Load unpacked").
+5. **Confirms the extension ID** - shows the deterministic ID SecureVault pins, and lets you
+   paste the one the browser actually shows; on confirm it rewrites the native host's
+   `allowed_origins` to match.
+6. **Summarizes** what was configured per browser, how to test, and how to remove it later.
+
+On a non-Windows machine the wizard still opens and explains each step, but the
+browser/registry actions report "Windows only" instead of running.
+
+The manual equivalent is:
 
 **1. Generate the bridge config files.** From the install/source dir:
 

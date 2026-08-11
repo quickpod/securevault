@@ -1,0 +1,3 @@
+# SecureVault runtime dependencies (pure-Python where possible; no network).
+cryptography>=41
+segno>=1.5          # TOTP enrollment QR codes (dependency-free)

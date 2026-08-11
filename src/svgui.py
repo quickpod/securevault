@@ -177,7 +177,8 @@ class App(tk.Tk):
         self.index = {}
         self.fmap = {"": {"dirs": set(), "files": []}}
         self._statcache = {}
-        self.title("SecureVault — by QuickOpen (quickopen.ai)")
+        self._next_vault = None            # set by switch_vault; read by main()
+        self._set_title()
         self.geometry("1040x620")
         self.minsize(760, 420)
         self._set_window_icon()
@@ -195,6 +196,13 @@ class App(tk.Tk):
             self._autofill = svpassgui.start_autofill(self, self.vault)
         except Exception:
             self._autofill = None
+        # freshly-created vaults may want the autofill wizard offered once
+        if getattr(vault, "_sv_freshly_created", False):
+            self.after(600, self._maybe_offer_wizard)
+
+    def _set_title(self):
+        self.title(f"SecureVault — {os.path.basename(self.vault.path)} "
+                   f"({self.vault.path}) — quickopen.ai")
 
     # ---------- layout
     def _asset_path(self, name):
@@ -290,6 +298,17 @@ class App(tk.Tk):
 
     def _menubar(self):
         bar = tk.Menu(self)
+
+        filem = tk.Menu(bar, tearoff=0)
+        filem.add_command(label="New Vault...", command=lambda: self.switch_vault("new"))
+        filem.add_command(label="Open Vault...", command=lambda: self.switch_vault("open"))
+        self._recent_menu = tk.Menu(filem, tearoff=0)
+        filem.add_cascade(label="Open Recent", menu=self._recent_menu)
+        self._fill_recent_menu()
+        filem.add_separator()
+        filem.add_command(label="Exit", command=self._on_close)
+        bar.add_cascade(label="File", menu=filem)
+
         tools = tk.Menu(bar, tearoff=0)
         tools.add_command(label="Install / repoint Explorer right-click menu",
                           command=self.shell_register)
@@ -301,8 +320,31 @@ class App(tk.Tk):
         tools.add_command(label="Change password / PIN", command=self.change_pw)
         tools.add_separator()
         tools.add_command(label="Passwords (manager)...", command=self.open_passwords)
+        tools.add_command(label="Set up browser autofill...", command=self.setup_autofill)
+        tools.add_command(label="Import passwords from browser...", command=self.import_passwords)
         bar.add_cascade(label="Tools", menu=tools)
         self.configure(menu=bar)
+
+    def _fill_recent_menu(self):
+        """Populate File > Open Recent from the (paths-only) config."""
+        try:
+            import svconfig
+            recent = svconfig.recent_vaults()
+        except Exception:
+            recent = []
+        self._recent_menu.delete(0, "end")
+        cur = os.path.abspath(self.vault.path)
+        shown = [p for p in recent if os.path.abspath(p) != cur]
+        if not shown:
+            self._recent_menu.add_command(label="(none)", state="disabled")
+            return
+        for p in shown:
+            exists = os.path.isfile(p)
+            label = p if exists else p + "   (missing)"
+            self._recent_menu.add_command(
+                label=label,
+                command=(lambda pp=p: self._open_recent(pp)) if exists else (lambda: None),
+                state=("normal" if exists else "disabled"))
 
     def _sash(self):
         try:
@@ -759,6 +801,93 @@ class App(tk.Tk):
         except Exception as ex:
             messagebox.showerror("SecureVault", f"Could not open the password manager:\n{ex}")
 
+    # ---------- browser autofill wizards
+    def setup_autofill(self):
+        try:
+            import svwizard
+            svwizard.launch_autofill_setup(master=self, app=self)
+        except Exception as ex:
+            messagebox.showerror("SecureVault", f"Could not open the setup wizard:\n{ex}")
+
+    def import_passwords(self):
+        try:
+            import svwizard
+            svwizard.launch_password_import(master=self, app=self, vault=self.vault)
+        except Exception as ex:
+            messagebox.showerror("SecureVault", f"Could not open the import wizard:\n{ex}")
+
+    def _maybe_offer_wizard(self):
+        try:
+            self.vault._sv_freshly_created = False   # offer only once
+        except Exception:
+            pass
+        if messagebox.askyesno(
+                "SecureVault",
+                "Your vault is ready.\n\nSet up browser autofill now so you can "
+                "fill and save logins from Chrome, Edge or Brave?\n\n"
+                "(You can always do this later from Tools > Set up browser autofill.)"):
+            self.setup_autofill()
+
+    # ---------- switch / open a different vault
+    def _open_recent(self, path):
+        self._switch_to(path, mode="open")
+
+    def switch_vault(self, mode):
+        """File > New/Open Vault: pick a location, create/unlock it, and swap the
+        whole window over to it (main() reopens the App on the new vault)."""
+        if mode == "new":
+            path = filedialog.asksaveasfilename(
+                parent=self, title="Create new vault", defaultextension=".dat",
+                initialfile="SecureVault.dat",
+                filetypes=[("SecureVault container", "*.dat"), ("All files", "*.*")])
+        else:
+            path = filedialog.askopenfilename(
+                parent=self, title="Open vault",
+                filetypes=[("SecureVault container", "*.dat"), ("All files", "*.*")])
+        if not path:
+            return
+        self._switch_to(path, mode=mode)
+
+    def _switch_to(self, path, mode):
+        if os.path.abspath(path) == os.path.abspath(self.vault.path):
+            messagebox.showinfo("SecureVault", "That vault is already open."); return
+        if mode == "new" and os.path.isfile(path):
+            if not messagebox.askyesno(
+                    "SecureVault",
+                    f"A file already exists at:\n{path}\n\nOpen it as an existing "
+                    "vault instead?"):
+                return
+            mode = "open"
+        # build/unlock the target vault BEFORE tearing down the current one, so a
+        # cancel or wrong password leaves the current session untouched.
+        if mode == "new":
+            vault = _create_vault_at(self, path)
+        else:
+            vault = _unlock_vault_at(self, path)
+        if vault is None:
+            return
+        if not self._confirm_discard_open():
+            return
+        self._next_vault = vault           # main() picks this up after we close
+        if getattr(self, "_autofill", None):
+            self._autofill.stop()
+        self.ws.wipe_all()
+        self.destroy()
+
+    def _confirm_discard_open(self):
+        """If files are checked out, confirm before switching away (which wipes
+        the decrypted copies). Returns True to proceed."""
+        ents = self.ws.list_open()
+        if not ents:
+            return True
+        changed = [e["name"] for e in ents if self.ws.changed(e["name"])]
+        msg = (f"{len(ents)} file(s) are still decrypted outside the vault.\n")
+        if changed:
+            msg += ("\nUNSAVED EDITS in:\n  " + "\n  ".join(changed)
+                    + "\n\nUse \"I'm done - close & wipe\" first to keep them.\n")
+        msg += "\nSwitching vaults wipes every decrypted copy now. Continue?"
+        return messagebox.askokcancel("SecureVault", msg)
+
     def change_pw(self):
         creds = gui_prompt_credentials(confirm=True, need_totp=False, title="New password + PIN")
         if not creds:
@@ -826,8 +955,108 @@ class App(tk.Tk):
         self.destroy()
 
 
+class VaultChooser(tk.Toplevel):
+    r"""Small first-run chooser: create a new vault or open an existing one, with
+    quick access to recently used ones. Returns .result as (mode, path) where mode
+    is 'new' or 'open', or None if cancelled. Paths only - never a secret."""
+    def __init__(self, master, default_new=None, recent=None):
+        super().__init__(master)
+        self.title("SecureVault - choose a vault")
+        self.result = None
+        self.default_new = default_new
+        self.resizable(False, False)
+        self.grab_set()
+        ttk.Label(self, padding=(14, 14, 14, 6), justify="left",
+                  text="No vault is open yet.\n\nCreate a new encrypted vault, or "
+                       "open an existing SecureVault.dat.").pack(anchor="w")
+        btns = ttk.Frame(self, padding=(14, 0, 14, 8)); btns.pack(fill="x")
+        ttk.Button(btns, text="Create new vault...", command=self._new).pack(side="left", padx=3)
+        ttk.Button(btns, text="Open existing vault...", command=self._open).pack(side="left", padx=3)
+        ttk.Button(btns, text="Cancel", command=self._cancel).pack(side="right", padx=3)
+        live = [p for p in (recent or []) if os.path.isfile(p)]
+        if live:
+            ttk.Separator(self, orient="horizontal").pack(fill="x", padx=14, pady=4)
+            ttk.Label(self, padding=(14, 0, 14, 0), text="Recent vaults:").pack(anchor="w")
+            lst = ttk.Frame(self, padding=(14, 2, 14, 12)); lst.pack(fill="x")
+            for p in live[:6]:
+                ttk.Button(lst, text=p, command=lambda pp=p: self._recent(pp))\
+                    .pack(anchor="w", fill="x", pady=1)
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.bind("<Escape>", lambda _e: self._cancel())
+
+    _FILTER = [("SecureVault container", "*.dat"), ("All files", "*.*")]
+
+    def _new(self):
+        initdir = os.path.dirname(self.default_new) if self.default_new else None
+        path = filedialog.asksaveasfilename(
+            parent=self, title="Create new vault", defaultextension=".dat",
+            initialfile=os.path.basename(self.default_new or "SecureVault.dat"),
+            initialdir=initdir, filetypes=self._FILTER)
+        if path:
+            self.result = ("new", path); self.destroy()
+
+    def _open(self):
+        path = filedialog.askopenfilename(parent=self, title="Open vault",
+                                          filetypes=self._FILTER)
+        if path:
+            self.result = ("open", path); self.destroy()
+
+    def _recent(self, p):
+        self.result = ("open", p); self.destroy()
+
+    def _cancel(self):
+        self.result = None; self.destroy()
+
+
+def _create_vault_at(master, path):
+    r"""Create + enroll a fresh vault at `path` (dialogs parented to `master`).
+    Returns an unlocked Vault, or None if cancelled. Marks the vault so the App
+    can offer the autofill wizard once, and remembers the path (paths only)."""
+    if os.path.isfile(path):
+        messagebox.showerror("SecureVault", f"A file already exists:\n{path}")
+        return None
+    creds = gui_prompt_credentials(confirm=True, need_totp=False, title="Create SecureVault")
+    if not creds:
+        return None
+    vault = sv.Vault(path)
+    try:
+        secret = vault.create(sv.auth_material(creds[0].encode("utf-8"),
+                                               creds[1].encode("utf-8")))
+    except sv.VaultError as ex:
+        messagebox.showerror("SecureVault", str(ex)); return None
+    import svtotp
+    uri = svtotp.provisioning_uri(secret, account="SecureVault")
+    _show_secret_window(master, secret, uri)
+    sv.remember_vault(path)
+    try:
+        vault._sv_freshly_created = True
+    except Exception:
+        pass
+    return vault
+
+
+def _unlock_vault_at(master, path):
+    """Unlock an existing vault at `path` (up to 3 tries). Returns an unlocked
+    Vault or None. Remembers the path on success (paths only, never secrets)."""
+    vault = sv.Vault(path)
+    if not vault.exists():
+        messagebox.showerror("SecureVault", f"No vault found at:\n{path}")
+        return None
+    for _ in range(3):
+        creds = gui_prompt_credentials(confirm=False, need_totp=True)
+        if creds is None:
+            return None
+        try:
+            vault.unlock(sv.auth_material(creds[0].encode("utf-8"),
+                                          creds[1].encode("utf-8")), creds[2])
+            sv.remember_vault(path)
+            return vault
+        except sv.VaultError as ex:
+            messagebox.showerror("SecureVault", str(ex))
+    return None
+
+
 def main():
-    dat = sv.default_dat()
     root = tk.Tk(); root.withdraw()
 
     # best-effort keystroke-logging check before any secret is entered. The PIN
@@ -841,44 +1070,52 @@ def main():
             + "\n\nDetection is heuristic. Your 6-digit PIN is entered by mouse "
               "clicks on a randomized pad, so it is safe from keyloggers even so.")
 
-    vault = sv.Vault(dat)
-    if not vault.exists():
-        if not messagebox.askyesno("SecureVault",
-                f"No vault found at:\n{dat}\n\nCreate a new Secure Vault here?"):
-            return
-        creds = gui_prompt_credentials(confirm=True, need_totp=False, title="Create SecureVault")
-        if not creds: return
-        secret = vault.create(sv.auth_material(creds[0].encode("utf-8"), creds[1].encode("utf-8")))
-        import svtotp
-        uri = svtotp.provisioning_uri(secret, account="SecureVault")
-        _show_secret_window(root, secret, uri)
+    # Startup vault: reopen the remembered one if it still exists; otherwise a
+    # legacy default next to the exe; otherwise let the user choose/create.
+    dat = sv.resolve_dat(remember=False)
+    if os.path.isfile(dat):
+        vault = _unlock_vault_at(root, dat)
     else:
-        for _ in range(3):
-            creds = gui_prompt_credentials(confirm=False, need_totp=True)
-            if creds is None:
-                return
-            try:
-                vault.unlock(sv.auth_material(creds[0].encode("utf-8"),
-                                              creds[1].encode("utf-8")), creds[2]); break
-            except sv.VaultError as ex:
-                messagebox.showerror("SecureVault", str(ex))
-        else:
-            return
+        import svconfig
+        chooser = VaultChooser(root, default_new=dat, recent=svconfig.recent_vaults())
+        root.wait_window(chooser)
+        if not chooser.result:
+            root.destroy(); return
+        mode, path = chooser.result
+        vault = _create_vault_at(root, path) if mode == "new" else _unlock_vault_at(root, path)
     root.destroy()
-    App(vault).mainloop()
+
+    # Run; if the user switches vaults from the File menu, App sets _next_vault
+    # and closes, and we reopen a clean window on the new (already-unlocked) one.
+    while vault is not None:
+        app = App(vault)
+        app.mainloop()
+        vault = getattr(app, "_next_vault", None)
 
 
 def _show_secret_window(master, secret, uri):
-    r"""Show the TOTP enrollment secret once, with a QR code if 'qrcode' is
-    available, else the otpauth URI as text."""
+    r"""Show the TOTP enrollment once: a scannable QR code (preferred) plus the
+    secret and otpauth URI as text for manual entry."""
     win = tk.Toplevel(master); win.title("SecureVault - enroll authenticator")
     win.grab_set()
-    ttk.Label(win, padding=10, justify="left",
-              text="Add this to your authenticator app NOW (shown once):\n\n"
-                   f"Secret:  {secret}").pack(anchor="w")
+    ttk.Label(win, padding=(10, 10, 10, 4), justify="left",
+              text="Scan this with your authenticator app (shown once):").pack(anchor="w")
+
+    import svqr
+    qr_img = svqr.photoimage(uri, scale=6)
+    if qr_img is not None:
+        qr_label = ttk.Label(win, image=qr_img)
+        qr_label.image = qr_img          # keep a reference or Tk drops the image
+        qr_label.pack(padx=10, pady=4)
+    else:
+        ttk.Label(win, padding=(10, 0), foreground="#b0700a", justify="left",
+                  text="(QR unavailable - enter the secret below manually.)").pack(anchor="w")
+
+    ttk.Label(win, padding=(10, 4, 10, 0), justify="left",
+              text=f"Or enter it by hand -  Secret:  {secret}").pack(anchor="w")
     txt = tk.Text(win, height=3, width=64, wrap="char"); txt.insert("1.0", uri)
     txt.configure(state="disabled"); txt.pack(padx=10, pady=6)
-    ttk.Label(win, padding=10,
+    ttk.Label(win, padding=10, justify="left",
               text="Google Authenticator / Authy / Aegis / 1Password all work.\n"
                    "You will need a code from it every time you open the vault.").pack(anchor="w")
     ttk.Button(win, text="I've saved it", command=win.destroy).pack(pady=8)

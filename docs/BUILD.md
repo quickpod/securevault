@@ -13,7 +13,7 @@ same `.exe` yourself**. Both yield an identical program.
 - For building the exe: **PyInstaller**.
 
 ```powershell
-py -m pip install cryptography pyinstaller
+py -m pip install -r requirements.txt pyinstaller   # cryptography + segno (QR)
 ```
 
 ## Run from source (no build)
@@ -52,6 +52,7 @@ pyinstaller --onefile --windowed --name SecureVault ^
   --hidden-import svsec  --hidden-import svtotp  --hidden-import svpass ^
   --hidden-import svpassgui --hidden-import svauth --hidden-import svipc ^
   --hidden-import svchrome  --hidden-import svbundle ^
+  --hidden-import svqr --hidden-import svconfig --hidden-import svwizard --hidden-import svautofill_setup ^
   sv_app.py
 ```
 

@@ -70,6 +70,31 @@ def key_and_id(privkey_path):
     return manifest_key, ext_id
 
 
+def set_allowed_origin(root, origin):
+    """(Re)write the native-host manifest's allowed_origins AND the host's own
+    second-check allow-list so both name exactly `origin`. Single source of
+    truth for those two files: apply() uses it, and the setup wizard reuses it
+    when the browser assigns a different extension ID than the derived one
+    (Chrome only pins our derived ID once the manifest "key" is present)."""
+    p = paths(root)
+    os.makedirs(p["nativehost"], exist_ok=True)
+    # host manifest: keep any existing metadata, replace only allowed_origins
+    if os.path.isfile(p["hostmanifest"]):
+        with open(p["hostmanifest"], "r", encoding="utf-8") as f:
+            host = json.load(f)
+    else:
+        host = {"name": HOST_NAME, "description": "SecureVault Autofill host",
+                "path": p["launcher"], "type": "stdio"}
+    host["allowed_origins"] = [origin]
+    with open(p["hostmanifest"], "w", encoding="utf-8") as f:
+        json.dump(host, f, indent=2)
+    # the host's own second-check list of allowed caller origins
+    os.makedirs(os.path.dirname(p["allowed"]), exist_ok=True)
+    with open(p["allowed"], "w", encoding="utf-8") as f:
+        json.dump([{"origin": origin}], f, indent=2)
+    return {"hostmanifest": p["hostmanifest"], "allowed": p["allowed"], "origin": origin}
+
+
 def apply(root):
     p = paths(root)
     os.makedirs(p["nativehost"], exist_ok=True)
@@ -94,17 +119,8 @@ def apply(root):
     with open(p["launcher"], "w", encoding="utf-8") as f:
         f.write(launcher)
 
-    # 3. native-messaging host manifest (same file registered for both browsers)
-    host = {"name": HOST_NAME, "description": "SecureVault Autofill host",
-            "path": p["launcher"], "type": "stdio",
-            "allowed_origins": [origin]}
-    with open(p["hostmanifest"], "w", encoding="utf-8") as f:
-        json.dump(host, f, indent=2)
-
-    # 4. the host's own second-check list of allowed caller origins
-    os.makedirs(os.path.dirname(p["allowed"]), exist_ok=True)
-    with open(p["allowed"], "w", encoding="utf-8") as f:
-        json.dump([{"origin": origin}], f, indent=2)
+    # 3 + 4. native-messaging host manifest + the host's own allow-list
+    set_allowed_origin(root, origin)
 
     return {"ext_id": ext_id, "origin": origin, "hostmanifest": p["hostmanifest"],
             "launcher": p["launcher"], "manifest": p["manifest"],

@@ -417,24 +417,91 @@ def gui_info(msg, title="SecureVault"):
 
 # --------------------------------------------------------------------------- cli
 def default_dat():
+    """LAST-RESORT vault location: next to the exe (frozen) or this script.
+    Prefer resolve_dat() for the full precedence chain; this is only its final
+    fallback. The SECUREVAULT_DAT override is still honoured here for callers
+    (and older code paths) that use default_dat() directly."""
     if os.environ.get("SECUREVAULT_DAT"):
         return os.environ["SECUREVAULT_DAT"]
     base = os.path.dirname(sys.executable if getattr(sys, "frozen", False)
                            else os.path.abspath(__file__))
     return os.path.join(base, "SecureVault.dat")
 
+
+def resolve_dat(explicit=None, remember=True):
+    r"""Work out which container file to use, in precedence order:
+      1. `explicit` - a path from `--dat`/`--vault` (CLI) or a GUI chooser.
+      2. SECUREVAULT_DAT environment override.
+      3. the vault remembered in config.json, IF that file still exists.
+      4. default_dat() next to the exe/script (last resort).
+    When `remember` is set and we land on an explicit path or an existing file,
+    the choice is written back to config.json (paths only, never secrets)."""
+    import svconfig
+    if explicit:
+        dat = os.path.abspath(explicit)
+    elif os.environ.get("SECUREVAULT_DAT"):
+        dat = os.environ["SECUREVAULT_DAT"]
+    else:
+        remembered = svconfig.last_vault()
+        if remembered and os.path.isfile(remembered):
+            dat = remembered
+        else:
+            dat = default_dat()
+    if remember and (explicit or os.path.isfile(dat)):
+        try:
+            svconfig.remember_vault(dat)
+        except Exception:
+            pass
+    return dat
+
+
+def remember_vault(path):
+    """Thin re-export so GUI/CLI callers can persist a chosen path via `sv`."""
+    import svconfig
+    try:
+        svconfig.remember_vault(path)
+    except Exception:
+        pass
+
+
+def _extract_dat(argv):
+    """Pull an optional `--dat <path>` / `--vault <path>` (or `--dat=<path>`)
+    out of the argument list, wherever it appears. Returns (remaining_argv,
+    explicit_path_or_None). Honoured by every command."""
+    out, explicit = [], None
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--dat", "--vault"):
+            if i + 1 < len(argv):
+                explicit = argv[i + 1]; i += 2; continue
+            i += 1; continue
+        if a.startswith("--dat=") or a.startswith("--vault="):
+            explicit = a.split("=", 1)[1]; i += 1; continue
+        out.append(a); i += 1
+    return out, explicit
+
 def _show_enrollment(secret):
     import svtotp
     uri = svtotp.provisioning_uri(secret, account="SecureVault", issuer="SecureVault")
+    # Print a scannable QR to the terminal for CLI users (falls back silently).
+    try:
+        import svqr
+        art = svqr.ascii_qr(uri)
+        if art:
+            print("\nScan this with your authenticator app (shown once):\n")
+            print(art)
+    except Exception:
+        pass
     gui_info("Add this authenticator (TOTP) secret to your app NOW - it is shown "
-             "only once:\n\n"
+             "only once. Scan the QR in your terminal, or enter it by hand:\n\n"
              f"  Secret : {secret}\n\n"
              f"  otpauth URI:\n  {uri}\n\n"
              "Google Authenticator / Authy / Aegis / 1Password all work. "
              "You will need a code from it every time you open the vault.")
 
-def open_vault(create_ok=False):
-    dat = default_dat()
+def open_vault(create_ok=False, dat=None):
+    dat = dat or resolve_dat()
     v = Vault(dat)
     if not v.exists():
         if not create_ok:
@@ -448,12 +515,15 @@ def open_vault(create_ok=False):
     return v.unlock(mat, code)
 
 def main(argv):
+    # A global `--dat <path>` / `--vault <path>` may appear anywhere and takes
+    # precedence over SECUREVAULT_DAT and the remembered/default location.
+    argv, _explicit_dat = _extract_dat(list(argv))
     if not argv:
         print(__doc__); return 0
     cmd, rest = argv[0], argv[1:]
+    dat = resolve_dat(_explicit_dat)
 
     if cmd == "init":
-        dat = default_dat()
         if os.path.isfile(dat):
             gui_info(f"Vault already exists:\n{dat}"); return 1
         v = Vault(dat)
@@ -466,7 +536,7 @@ def main(argv):
     if cmd in ("add", "addkeep"):
         if not rest:
             gui_info("Send to SV: no files given."); return 1
-        v = open_vault()
+        v = open_vault(dat=dat)
         delete = (cmd == "add")
         done = []
         for p in rest:
@@ -487,7 +557,7 @@ def main(argv):
         return 0
 
     if cmd == "list":
-        v = open_vault(); idx = v.list()
+        v = open_vault(dat=dat); idx = v.list()
         total = sum(e["size"] for e in idx.values())
         print(f"{len(idx)} file(s), {total/1024/1024:.1f} MB decrypted:")
         for name, e in sorted(idx.items()):
@@ -497,12 +567,12 @@ def main(argv):
     if cmd == "get":
         if not rest:
             print("usage: securevault get <name> [dest]"); return 1
-        v = open_vault()
+        v = open_vault(dat=dat)
         dest = rest[1] if len(rest) > 1 else os.getcwd()
         out = v.get(rest[0], dest); gui_info(f"Extracted -> {out}"); return 0
 
     if cmd == "extract":
-        v = open_vault()
+        v = open_vault(dat=dat)
         destdir = rest[0] if rest else os.getcwd()
         idx = v.list()
         for name in idx:
@@ -511,25 +581,25 @@ def main(argv):
 
     if cmd == "remove":
         if not rest: print("usage: securevault remove <name>"); return 1
-        v = open_vault(); v.remove(rest[0]); gui_info(f"Removed {rest[0]}"); return 0
+        v = open_vault(dat=dat); v.remove(rest[0]); gui_info(f"Removed {rest[0]}"); return 0
 
     if cmd == "verify":
-        v = open_vault(); idx, bad = v.verify()
+        v = open_vault(dat=dat); idx, bad = v.verify()
         if bad:
             gui_info("INTEGRITY FAILURES:\n" + "\n".join(f"{n}: {r}" for n, r in bad)); return 3
         gui_info(f"OK - all {len(idx)} file(s) authenticated."); return 0
 
     if cmd == "passwd":
-        v = open_vault()
+        v = open_vault(dat=dat)
         newmat, _ = prompt_credentials(confirm=True, need_totp=False, title="New SecureVault password")
         v.change_password(newmat)
         gui_info("Master password and PIN changed (authenticator secret unchanged)."); return 0
 
     if cmd == "pw":
-        # password manager. Same vault, same three factors - open_vault()
+        # password manager. Same vault, same three factors - open_vault(dat=dat)
         # enforces password + PIN + TOTP before the store is even loaded.
         import svpass, svpasscli
-        v = open_vault()
+        v = open_vault(dat=dat)
         store = svpass.PasswordStore(v)
         store.load()
         return svpasscli.run(store, rest)
