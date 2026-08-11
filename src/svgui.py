@@ -177,9 +177,10 @@ class App(tk.Tk):
         self.index = {}
         self.fmap = {"": {"dirs": set(), "files": []}}
         self._statcache = {}
-        self.title("SecureVault")
+        self.title("SecureVault — by QuickOpen (quickopen.ai)")
         self.geometry("1040x620")
         self.minsize(760, 420)
+        self._set_window_icon()
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.reload()
@@ -196,6 +197,28 @@ class App(tk.Tk):
             self._autofill = None
 
     # ---------- layout
+    def _asset_path(self, name):
+        """Locate a bundled asset from source or a PyInstaller one-file build."""
+        import sys
+        roots = []
+        if getattr(sys, "_MEIPASS", None):
+            roots.append(sys._MEIPASS)
+        here = os.path.dirname(os.path.abspath(__file__))
+        roots += [here, os.path.dirname(here), os.path.dirname(sys.executable)]
+        for r in roots:
+            p = os.path.join(r, name)
+            if os.path.exists(p):
+                return p
+        return None
+
+    def _set_window_icon(self):
+        try:
+            ico = self._asset_path("securevault.ico")
+            if ico:
+                self.iconbitmap(ico)
+        except Exception:
+            pass  # icon is cosmetic; never block launch on it
+
     def _build(self):
         self._menubar()
 

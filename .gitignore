@@ -15,6 +15,8 @@
 # ---- source that is safe to publish
 !.gitignore
 !README.md
+!LICENSE
+!.quickopen.json
 !*.ps1
 !src/*.py
 !src/*.md
@@ -26,6 +28,17 @@
 !nativehost/*.json
 !nativehost/*.bat
 !ios/**
+# ---- docs, packaging, CI, and branding (safe, public)
+!docs/*.md
+!.github/workflows/*.yml
+!packaging/*.iss
+!packaging/*.txt
+!packaging/branding/*.png
+!packaging/branding/*.bmp
+!securevault.ico
+!securevault.png
+# the QuickOpen ROOT cert is public (the trust anchor) — allow just this one
+!quickopen-root.crt
 
 # ---- re-denied even though the rules above would otherwise catch them
 # private keys: extension.pem and _signing_key.pem sign the Chrome extension.
@@ -65,3 +78,4 @@ Backups/
 
 # generated: contains the DoH bearer token in cleartext
 *.mobileconfig
+.github/workflows/build-windows.yml

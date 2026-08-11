@@ -1,0 +1,11 @@
+{
+  "slug": "securevault",
+  "name": "SecureVault",
+  "tagline": "A local-only, three-factor encrypted vault and Windows hardening toolkit - no cloud, ever.",
+  "categorySlug": "password-managers",
+  "license": "Apache-2.0",
+  "description": "SecureVault is a standalone Windows privacy suite. It combines an offline AES-256-GCM encrypted file-and-password vault - unlocked by three factors (master password, a click-only randomized on-screen PIN pad, and a TOTP code) with a keylog-resistant design and an optional local-only browser autofill bridge. Alongside it ships a set of standalone PowerShell scripts that harden Windows: encrypted DNS, inbound firewall lockdown, idle-footprint reduction, Chrome hardening and more, each with a matching revert. Nothing talks to the cloud; the only secret is what you type.",
+  "aiStack": "Python (tkinter GUI, cryptography), PowerShell 5.1+, Chrome MV3 extension, native messaging host",
+  "platforms": ["windows"],
+  "buildEntry": "src/sv_app.py"
+}
