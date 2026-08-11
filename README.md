@@ -112,20 +112,30 @@ to undo. See [`docs/USAGE.md`](docs/USAGE.md) for details and cautions.
 
 ## Install
 
-### A. From the signed release (recommended)
+### A. One-click signed installer (recommended)
 
-1. Download SecureVault from its [QuickOpen](https://quickopen.dev) page. You get the
-   release payload plus `install.ps1` and (optionally) a `SHA256SUMS` file.
-2. Open **PowerShell** in the download folder and run:
+Download the single file **`SecureVault-Setup.ps1`** from the
+[QuickOpen page](https://quickopen.ai/projects/securevault) or the
+[GitHub release](https://github.com/quickpod/securevault/releases/latest). That
+one file has everything embedded — the program, the QuickOpen Root CA, and an
+integrity hash — so it works fully offline. Right-click it → **Run with
+PowerShell**, or:
 
-   ```powershell
-   .\install.ps1
-   ```
+```powershell
+powershell -ExecutionPolicy Bypass -File SecureVault-Setup.ps1
+```
 
-   It stages SecureVault into `%LOCALAPPDATA%\SecureVault`, wires up the autofill native
-   host, and registers the Explorer right-click menu. Add `-NoAutofill` or
-   `-NoShell` to skip either integration. Verify the download against `SHA256SUMS`
-   first if provided.
+It verifies its own payload, offers to trust the QuickOpen Root CA (so Windows
+recognises our signature), extracts to `%LOCALAPPDATA%\SecureVault`, and runs
+the setup (autofill bridge + Explorer menu). Nothing else to download.
+
+Prefer to verify by hand first? Every release also ships a detached signature.
+See [`/trust`](https://quickopen.ai/trust):
+
+```powershell
+openssl cms -verify -binary -inform DER -in SecureVault-Setup.ps1.sig `
+  -content SecureVault-Setup.ps1 -CAfile quickopen-root.crt -purpose any -out NUL
+```
 
 ### B. Manual / from source
 
