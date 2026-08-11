@@ -1,0 +1,73 @@
+name: build-windows
+
+# Builds the real Windows binaries and a friendly installer on a Windows runner
+# (PyInstaller does not cross-compile). Produces SecureVault.exe, svhost.exe, and
+# SecureVault-Setup.exe (Inno Setup installer with Desktop + Start Menu
+# shortcuts). Artifacts are downloaded and Authenticode-signed off-CI so the
+# code-signing key never touches GitHub.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build deps
+        run: python -m pip install --upgrade pip cryptography pyinstaller
+
+      - name: Build SecureVault.exe
+        working-directory: src
+        run: >
+          pyinstaller --onefile --windowed --name SecureVault
+          --icon ../securevault.ico
+          --version-file ../packaging/version.txt
+          --add-data "../securevault.ico;."
+          --collect-submodules cryptography
+          --hidden-import svgui --hidden-import svopen --hidden-import svshell
+          --hidden-import svsec --hidden-import svtotp --hidden-import svpass
+          --hidden-import svpassgui --hidden-import svauth --hidden-import svipc
+          --hidden-import svchrome --hidden-import svbundle
+          sv_app.py
+
+      - name: Build svhost.exe (native messaging host)
+        working-directory: src
+        run: pyinstaller --onefile --console --name svhost svhost.py
+
+      - name: Stage installer inputs
+        shell: pwsh
+        run: |
+          $stage = "packaging/staging"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item src/dist/SecureVault.exe $stage/
+          Copy-Item src/dist/svhost.exe $stage/ -ErrorAction SilentlyContinue
+          Copy-Item quickopen-root.crt $stage/
+          Copy-Item README.md, LICENSE $stage/ -ErrorAction SilentlyContinue
+          Copy-Item extension $stage/extension -Recurse
+          Copy-Item nativehost $stage/nativehost -Recurse
+          Copy-Item docs $stage/docs -Recurse -ErrorAction SilentlyContinue
+          Get-ChildItem *.ps1 | Copy-Item -Destination $stage/
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Compile installer
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging\installer.iss'
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: securevault-windows
+          path: |
+            src/dist/SecureVault.exe
+            src/dist/svhost.exe
+            packaging/dist/SecureVault-Setup.exe
+          if-no-files-found: error

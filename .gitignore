@@ -78,4 +78,3 @@ Backups/
 
 # generated: contains the DoH bearer token in cleartext
 *.mobileconfig
-.github/workflows/build-windows.yml
