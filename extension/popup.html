@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8">
+<style>
+  body { font: 13px system-ui, Segoe UI, sans-serif; width: 280px; margin: 0; padding: 12px; }
+  h1 { font-size: 14px; margin: 0 0 8px; }
+  #status { padding: 8px; border-radius: 6px; margin: 8px 0; }
+  .ok { background: #e7f6e7; color: #164; }
+  .bad { background: #fdecec; color: #a11; }
+  .warn { background: #fff5e0; color: #8a5300; }
+  p { color: #555; margin: 6px 0 0; }
+  .hidden { display: none; }
+  #pin { font: 20px Consolas, monospace; width: 130px; letter-spacing: 4px;
+         padding: 5px; text-align: center; }
+  button { font: 13px system-ui; padding: 5px 10px; margin-top: 8px; cursor: pointer; }
+  #msg { margin-top: 8px; min-height: 16px; }
+  #msg.err { color: #a11; }
+  #msg.good { color: #164; }
+  .link { background: none; border: none; color: #36c; text-decoration: underline;
+          padding: 0; margin-top: 10px; font-size: 12px; }
+</style></head>
+<body>
+  <h1>SecureVault Autofill</h1>
+  <div id="status">checking…</div>
+
+  <!-- shown only when this browser has never been paired, or was revoked -->
+  <div id="pairbox" class="hidden">
+    <p>In the SecureVault app, open <b>Passwords → Browsers… → Pair a browser</b>,
+       then type the 6-digit PIN it shows:</p>
+    <input id="pin" maxlength="6" inputmode="numeric" autocomplete="off"
+           placeholder="000000">
+    <button id="pairbtn">Pair</button>
+    <div id="msg"></div>
+  </div>
+
+  <!-- shown once paired -->
+  <div id="pairedbox" class="hidden">
+    <p>This browser is paired. Passwords fill only while the SecureVault app is
+       open and unlocked.</p>
+    <button id="unpairbtn" class="link">Forget this pairing</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

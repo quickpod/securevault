@@ -1,0 +1,67 @@
+# DENY EVERYTHING, THEN ALLOW SOURCE. Deliberately inverted.
+#
+# This folder is not a clean project directory - it is a working security tree
+# that also holds a 10.9 GB encrypted vault, two Chrome signing keys, three
+# built executables and a machine posture baseline. A blocklist would publish
+# the next secret someone drops in here. An allowlist ignores it by default.
+#
+# If you add a new source file type, add an allow rule for it and re-run
+# `git status` before committing. If you are tempted to `git add -f`, stop and
+# work out why the file is ignored first.
+
+*
+!*/
+
+# ---- source that is safe to publish
+!.gitignore
+!README.md
+!*.ps1
+!src/*.py
+!src/*.md
+!src/*.ps1
+!extension/*.js
+!extension/*.json
+!extension/*.html
+!extension/*.css
+!nativehost/*.json
+!nativehost/*.bat
+!ios/**
+
+# ---- re-denied even though the rules above would otherwise catch them
+# private keys: extension.pem and _signing_key.pem sign the Chrome extension.
+# Publishing either lets anyone ship a signed impostor of it.
+*.pem
+*.key
+*.p12
+*.mobileprovision
+
+# the vault itself, and anything shaped like it
+*.dat
+*.crx
+*.exe
+*.exe.bak-*
+
+# build output
+build/
+dist/
+src/build/
+src/dist/
+src/__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.spec
+
+# scratch / open-in-place plaintext and local env
+scratch/
+.env
+.env.*
+
+# machine-specific state, not source
+totp.txt
+baseline-*.txt
+Backups/
+*.log
+
+# generated: contains the DoH bearer token in cleartext
+*.mobileconfig

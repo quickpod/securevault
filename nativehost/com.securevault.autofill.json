@@ -1,0 +1,9 @@
+{
+  "name": "com.securevault.autofill",
+  "description": "SecureVault Autofill host",
+  "path": "%LOCALAPPDATA%\\SecureVault\\nativehost\\svhost-launcher.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://EXTENSION_ID_AFTER_LOAD/"
+  ]
+}
