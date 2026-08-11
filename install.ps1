@@ -32,7 +32,8 @@ param(
     [string]$Tag = "latest",
     [string]$InstallDir = "",
     [ValidateSet("ask", "yes", "no")]
-    [string]$TrustCA = "ask"
+    [string]$TrustCA = "ask",
+    [switch]$NoSetup
 )
 
 $ErrorActionPreference = "Stop"
@@ -131,24 +132,38 @@ try {
         Write-Host "    OK  $name" -ForegroundColor Green
     }
 
-    # 6. Install: place verified files into InstallDir.
+    # 6. Install: place verified files into InstallDir, expanding a source zip if present.
     Write-Step "Installing to $InstallDir"
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+    $srcZip = Get-ChildItem $work -Filter *-src.zip | Select-Object -First 1
+    if ($srcZip) {
+        Expand-Archive -Path $srcZip.FullName -DestinationPath $InstallDir -Force
+        Write-Host "    Expanded $($srcZip.Name)"
+    }
     Get-ChildItem $work -File | Where-Object {
-        $_.Name -notmatch '\.(sig)$' -and $_.Name -ne 'SHA256SUMS' -and $_.Name -ne 'quickopen-root.crt' -and $_.Name -ne 'quickopen-root.cer'
+        $_.Name -notmatch '\.(sig)$' -and $_.Name -ne 'SHA256SUMS' -and
+        $_.Name -notmatch '-src\.zip$' -and
+        $_.Name -ne 'quickopen-root.crt' -and $_.Name -ne 'quickopen-root.cer'
     } | ForEach-Object {
         Copy-Item $_.FullName (Join-Path $InstallDir $_.Name) -Force
     }
 
-    # 7. Run the project's own post-install if present (e.g. shell integration).
+    # 7. Hand off to the project's own setup (extracted from the source zip),
+    #    then surface any executable.
+    $setup = Get-ChildItem $InstallDir -Filter 'Setup-*.ps1' | Select-Object -First 1
+    if ($setup -and -not $NoSetup) {
+        Write-Step "Running $($setup.Name)"
+        & powershell -ExecutionPolicy Bypass -File $setup.FullName -InstallRoot $InstallDir
+    } elseif ($setup) {
+        Write-Host "    Skipped setup ($($setup.Name)); run it yourself to finish wiring." -ForegroundColor DarkGray
+    }
     $exe = Get-ChildItem $InstallDir -Filter *.exe | Select-Object -First 1
     if ($exe) {
-        Write-Host ""
         Write-Host "Installed $($exe.Name) to $InstallDir" -ForegroundColor Green
-        Write-Host "Run it from there, or add $InstallDir to your PATH."
     }
     Write-Host ""
     Write-Host "Done. Every installed file was signed by QuickOpen and hash-verified." -ForegroundColor Green
+    Write-Host "Uninstall any time with $InstallDir\uninstall.ps1 (if provided)." -ForegroundColor DarkGray
 }
 finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
