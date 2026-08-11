@@ -34,9 +34,13 @@ IS_WINDOWS = sys.platform.startswith("win")
 
 # --------------------------------------------------------------------------- app dir
 def default_root():
-    r"""The SecureVault install/app directory that holds src\, extension\ and
-    nativehost\. In a source tree this is the repo root (parent of src\); in an
-    install it is %LOCALAPPDATA%\SecureVault (where src\ was copied)."""
+    r"""The SecureVault install/app directory that holds extension\ and
+    nativehost\ (and src\ in a source tree). For a frozen build this is the
+    folder that holds SecureVault.exe; a PyInstaller one-file build unpacks the
+    code to a temp dir, so __file__ must NOT be used there. In a source tree it
+    is the repo root (parent of src\)."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -678,7 +682,11 @@ class _IMExport(WizardStep):
         ttk.Label(row, text="Browser:").pack(side="left")
         keys = [b["key"] for b in _BROWSERS]
         names = {b["key"]: b["name"] for b in _BROWSERS}
-        default = self.wiz.state.get("import_browser") or keys[0]
+        # Default to a browser that is actually installed (e.g. Edge when Chrome
+        # isn't present), falling back to the first in the list.
+        found = {b["key"]: b["found"] for b in detect_browsers()}
+        default = (self.wiz.state.get("import_browser")
+                   or next((k for k in keys if found.get(k)), keys[0]))
         self.sel = tk.StringVar(value=default)
         self.combo = ttk.Combobox(row, state="readonly",
                                   values=[names[k] for k in keys], width=22)

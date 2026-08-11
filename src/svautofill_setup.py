@@ -108,11 +108,15 @@ def apply(root):
     with open(p["manifest"], "w", encoding="utf-8") as f:
         json.dump(mani, f, indent=2)
 
-    # 2. native-host launcher: prefer a frozen console svhost.exe, else Python
+    # 2. native-host launcher: prefer a frozen console svhost.exe (checked both
+    #    next to this .bat and one level up in the app root, since the installer
+    #    ships it in the app root), else fall back to the Python source.
     launcher = (
         "@echo off\r\n"
         'if exist "%~dp0svhost.exe" (\r\n'
         '  "%~dp0svhost.exe" %*\r\n'
+        ') else if exist "%~dp0..\\svhost.exe" (\r\n'
+        '  "%~dp0..\\svhost.exe" %*\r\n'
         ") else (\r\n"
         f'  "{sys.executable}" "{p["svhost"]}" %*\r\n'
         ")\r\n")

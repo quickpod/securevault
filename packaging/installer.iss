@@ -34,6 +34,10 @@ AppCopyright=Apache-2.0. 100%% AI-built, published on QuickOpen (quickopen.ai).
 VersionInfoCompany=QuickOpen
 VersionInfoProductName=SecureVault
 VersionInfoVersion=1.0.0.0
+; Install per-user by default (no admin, and the app directory stays writable so
+; the browser-autofill wizard can inject the extension key + write the native
+; host manifest). {autopf} then resolves to %LOCALAPPDATA%\Programs\SecureVault.
+PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesInstallIn64BitMode=x64compatible
 
