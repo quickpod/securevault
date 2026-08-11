@@ -112,29 +112,30 @@ to undo. See [`docs/USAGE.md`](docs/USAGE.md) for details and cautions.
 
 ## Install
 
-### A. One-click signed installer (recommended)
+### A. One-click installer (recommended)
 
-Download the single file **`SecureVault-Setup.ps1`** from the
+Download **`SecureVault-Setup.exe`** from the
 [QuickOpen page](https://quickopen.ai/projects/securevault) or the
-[GitHub release](https://github.com/quickpod/securevault/releases/latest). That
-one file has everything embedded — the program, the QuickOpen Root CA, and an
-integrity hash — so it works fully offline. Right-click it → **Run with
-PowerShell**, or:
+[GitHub release](https://github.com/quickpod/securevault/releases/latest) and
+**double-click it**. No Python, no command line. The installer:
+
+- creates a **Desktop shortcut** and a **Start Menu** entry,
+- adds an **Add/Remove Programs** entry (clean uninstall),
+- optionally **trusts the QuickOpen Root CA** (a checkbox) so Windows verifies
+  our signature natively,
+- registers the Explorer right-click menu.
+
+The installer is **Authenticode-signed** by the QuickOpen Code Signing CA. Once
+you've trusted our root, Windows shows the publisher as **QuickOpen**. (Because
+we run our own certificate authority rather than a commercial one, SmartScreen
+may still show a caution on first download — that's expected; the signature and
+publisher are verifiable against [`/trust`](https://quickopen.ai/trust).)
+
+Prefer to verify by hand first? Every release also ships a detached signature:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File SecureVault-Setup.ps1
-```
-
-It verifies its own payload, offers to trust the QuickOpen Root CA (so Windows
-recognises our signature), extracts to `%LOCALAPPDATA%\SecureVault`, and runs
-the setup (autofill bridge + Explorer menu). Nothing else to download.
-
-Prefer to verify by hand first? Every release also ships a detached signature.
-See [`/trust`](https://quickopen.ai/trust):
-
-```powershell
-openssl cms -verify -binary -inform DER -in SecureVault-Setup.ps1.sig `
-  -content SecureVault-Setup.ps1 -CAfile quickopen-root.crt -purpose any -out NUL
+openssl cms -verify -binary -inform DER -in SecureVault-Setup.exe.sig `
+  -content SecureVault-Setup.exe -CAfile quickopen-root.crt -purpose any -out NUL
 ```
 
 ### B. Manual / from source
