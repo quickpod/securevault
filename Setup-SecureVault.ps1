@@ -40,7 +40,15 @@ Write-Host ""
 
 # --------------------------------------------------------------- 1. stage files
 Write-Host "1. Staging files..." -ForegroundColor Cyan
-if ($PSCmdlet.ShouldProcess($InstallRoot, 'copy program files')) {
+# When the bundled installer extracts straight into the install location, the
+# source and destination are the same folder - the files are already staged, so
+# copying would try to overwrite each file with itself. Detect that and skip.
+$srcResolved = (Resolve-Path $src).Path.TrimEnd('\')
+$dstResolved = if (Test-Path $InstallRoot) { (Resolve-Path $InstallRoot).Path.TrimEnd('\') } else { $InstallRoot.TrimEnd('\') }
+$inPlace = ($srcResolved -eq $dstResolved)
+if ($inPlace) {
+    Ok "already in place at $InstallRoot - no copy needed"
+} elseif ($PSCmdlet.ShouldProcess($InstallRoot, 'copy program files')) {
     New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
     foreach ($item in @('src', 'extension', 'nativehost', 'README.md', 'LICENSE', 'docs')) {
         $from = Join-Path $src $item
@@ -51,7 +59,7 @@ if ($PSCmdlet.ShouldProcess($InstallRoot, 'copy program files')) {
     }
     # copy the hardening scripts (repo-root *.ps1) so uninstall.ps1 can revert them
     Get-ChildItem -Path $src -Filter '*.ps1' -File |
-        Where-Object { $_.Name -notin @('install.ps1', 'uninstall.ps1') } |
+        Where-Object { $_.Name -notin @('install.ps1', 'uninstall.ps1', 'Setup-SecureVault.ps1') } |
         ForEach-Object { Copy-Item $_.FullName -Destination $InstallRoot -Force }
     Copy-Item (Join-Path $src 'uninstall.ps1') -Destination $InstallRoot -Force -EA SilentlyContinue
     # stage a signed exe if the release shipped one
