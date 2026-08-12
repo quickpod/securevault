@@ -74,3 +74,9 @@ jobs:
             src/dist/svhost.exe
             packaging/dist/SecureVault-Setup.exe
           if-no-files-found: error
+      - name: Upload staging (for signed repack)
+        uses: actions/upload-artifact@v4
+        with:
+          name: securevault-staging
+          path: packaging/staging
+          if-no-files-found: error

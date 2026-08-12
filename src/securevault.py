@@ -1,3 +1,13 @@
+
+# Single-instance marker: the installer's AppMutex checks this to warn the
+# user to close the app before install/uninstall. Harmless off Windows.
+if os.name == "nt":
+    try:
+        import ctypes
+        ctypes.windll.kernel32.CreateMutexW(None, False, "QuickOpen.SecureVault")
+    except Exception:
+        pass
+
 #!/usr/bin/env python3
 r"""
 SecureVault - a standalone, password-protected encrypted file vault.

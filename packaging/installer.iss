@@ -7,11 +7,12 @@
 ;   README.md, LICENSE, quickopen-root.crt
 
 #define AppName "SecureVault"
-#define AppVersion "1.0.1"
+#define AppVersion "1.0.2"
 #define AppPublisher "QuickOpen (quickopen.ai)"
 #define AppURL "https://quickopen.ai/projects/securevault"
 
 [Setup]
+AppMutex=QuickOpen.SecureVault
 AppId={{9E7C2B4A-2F51-4E3B-9C7A-5EC0A1B2D3F0}
 AppName={#AppName}
 AppVersion={#AppVersion}
@@ -33,7 +34,7 @@ WizardSmallImageFile=branding\wizard-small.bmp
 AppCopyright=Apache-2.0. 100%% AI-built, published on QuickOpen (quickopen.ai).
 VersionInfoCompany=QuickOpen
 VersionInfoProductName=SecureVault
-VersionInfoVersion=1.0.1.0
+VersionInfoVersion=1.0.2.0
 ; Install per-user by default (no admin, and the app directory stays writable so
 ; the browser-autofill wizard can inject the extension key + write the native
 ; host manifest). {autopf} then resolves to %LOCALAPPDATA%\Programs\SecureVault.
@@ -79,3 +80,9 @@ Filename: "{app}\SecureVault.exe"; Description: "Launch SecureVault now"; Flags:
 
 [UninstallRun]
 Filename: "{app}\SecureVault.exe"; Parameters: "unregister"; Flags: runhidden skipifdoesntexist; RunOnceId: "SvUnregister"
+
+[UninstallDelete]
+; App-owned state only. The vault file (SecureVault.dat) is the user's data,
+; lives wherever they chose, and is intentionally never touched.
+Type: filesandordirs; Name: "{localappdata}\SecureVault"
+
