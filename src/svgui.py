@@ -29,14 +29,24 @@ import securevault as sv
 import svsec
 import svopen
 import svshell
+import svtheme
+from svtheme import TH, UI, MONO
 
 
 PIN_LEN = 6
 
 # Treeview iid prefixes. A row is either a folder or a file and the id says
-# which, so a click never has to guess from the text.
-DIR_TAG  = "D\x00"
-FILE_TAG = "F\x00"
+# which, so a click never has to guess from the text. Only the FIRST character
+# carries the meaning; the rest of the iid is the vault path verbatim, so a
+# path containing the separator is still unambiguous.
+#
+# These used to be "D\x00"/"F\x00". A NUL cannot survive the trip through Tcl
+# on Linux - every iid was truncated at the NUL, so the second folder collided
+# with the first and the window died with "Item D already exists" before it
+# ever appeared. Windows/Tk tolerated it; the Linux build did not, and this app
+# ships for both.
+DIR_TAG  = "D:"
+FILE_TAG = "F:"
 
 
 class NumericPinPad(tk.Toplevel):
@@ -47,7 +57,9 @@ class NumericPinPad(tk.Toplevel):
     or None if cancelled."""
     def __init__(self, master, prompt="Enter 6-digit PIN"):
         super().__init__(master)
+        svtheme.ensure(self)
         self.title("SecureVault - PIN")
+        self.configure(bg=TH.bg)
         self.result = None
         self._buf = []
         self.resizable(False, False)
@@ -77,9 +89,9 @@ class NumericPinPad(tk.Toplevel):
             j = secrets.randbelow(i + 1)
             digits[i], digits[j] = digits[j], digits[i]
         for idx, d in enumerate(digits):
-            tk.Button(self.pad, text=d, width=4, height=2,
-                      command=lambda c=d: self._press(c)).grid(
-                      row=idx // 5, column=idx % 5, padx=2, pady=2)
+            svtheme.keypad_button(self.pad, d,
+                                  lambda c=d: self._press(c)).grid(
+                                  row=idx // 5, column=idx % 5, padx=3, pady=3)
 
     def _press(self, d):
         if len(self._buf) < PIN_LEN:
@@ -115,6 +127,7 @@ def gui_prompt_credentials(confirm=False, need_totp=True, title="SecureVault"):
     hidden root when called from the no-console CLI path."""
     owns_root = not tk._default_root
     root = tk.Tk() if owns_root else tk._default_root
+    svtheme.ensure(root)
     if owns_root:
         root.withdraw()
     try:
@@ -171,6 +184,10 @@ def build_folder_map(index):
 class App(tk.Tk):
     def __init__(self, vault):
         super().__init__()
+        # Aura first: tk fixes a widget's colours when it is created, so a
+        # theme applied after _build() would only reach whatever came next.
+        svtheme.apply(self, svtheme.load_pref())
+        self.configure(bg=TH.bg)
         self.vault = vault
         self.ws = svopen.Workspace(vault)
         self.cwd = ""                      # folder currently shown, "" = root
@@ -183,6 +200,7 @@ class App(tk.Tk):
         self.minsize(760, 420)
         self._set_window_icon()
         self._build()
+        self._set_title()          # again: the header label only exists now
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.reload()
         self.after(60, lambda: self._sash())
@@ -196,6 +214,11 @@ class App(tk.Tk):
             self._autofill = svpassgui.start_autofill(self, self.vault)
         except Exception:
             self._autofill = None
+        # Follow the desktop's Aura Dark/Light while the preference is
+        # "system". darkdetect's listener runs on its own thread, so the change
+        # is marshalled onto the Tk loop before any widget is touched.
+        svtheme.watch_system(
+            lambda mode: self.after(0, lambda m=mode: self._system_theme(m)))
         # freshly-created vaults may want the autofill wizard offered once
         if getattr(vault, "_sv_freshly_created", False):
             self.after(600, self._maybe_offer_wizard)
@@ -203,6 +226,21 @@ class App(tk.Tk):
     def _set_title(self):
         self.title(f"SecureVault — {os.path.basename(self.vault.path)} "
                    f"({self.vault.path}) — quickopen.ai")
+        # The header carries the same thing in the window itself, because a
+        # title bar is the first thing a screenshot or a maximised window loses.
+        lbl = getattr(self, "vault_label", None)
+        if lbl is not None:
+            # Home collapsed to ~: the header is for orienting yourself among
+            # several vaults, and an absolute path long enough to push the
+            # theme control off the edge orients nobody. The full path is a
+            # hover away in the title bar.
+            disp, home = self.vault.path, os.path.expanduser("~")
+            if home and disp.startswith(home + os.sep):
+                disp = "~" + disp[len(home):]
+            try:
+                lbl.configure(text=disp)
+            except tk.TclError:
+                pass
 
     # ---------- layout
     def _asset_path(self, name):
@@ -230,13 +268,36 @@ class App(tk.Tk):
     def _build(self):
         self._menubar()
 
-        top = ttk.Frame(self, padding=(8, 8, 8, 4)); top.pack(fill="x")
+        # ---- Aura header: brand mark, vault name, theme control, then the
+        # signature accent beam. The same header every QuickOpen app carries.
+        head = ttk.Frame(self, padding=(12, 12, 12, 9)); head.pack(fill="x")
+        self._brand_icon = None
+        try:
+            png = self._asset_path("securevault.png")
+            if png:
+                img = tk.PhotoImage(file=png, master=self)
+                k = max(1, round(img.width() / 22))
+                self._brand_icon = img.subsample(k, k)   # kept: tk drops unref'd
+                tk.Label(head, image=self._brand_icon, bd=0, bg=TH.bg)\
+                    .pack(side="left", padx=(0, 9))
+        except Exception:
+            self._brand_icon = None
+        ttk.Label(head, text="SecureVault", font=(UI, 13, "bold"))\
+            .pack(side="left")
+        self.vault_label = ttk.Label(head, text="", style="Muted.TLabel")
+        self.vault_label.pack(side="left", padx=(14, 0))
+        self._theme_btn = ttk.Button(head, text=svtheme.label(),
+                                     command=self.cycle_theme)
+        self._theme_btn.pack(side="right")
+        svtheme.beam(self).pack(fill="x")
+
+        top = ttk.Frame(self, padding=(8, 10, 8, 4)); top.pack(fill="x")
         ttk.Label(top, text="Search:").pack(side="left")
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *_: self.refresh())
         e = ttk.Entry(top, textvariable=self.search_var); e.pack(side="left", fill="x", expand=True, padx=6)
         e.focus_set()
-        ttk.Button(top, text="Add Files", command=self.add_files).pack(side="left", padx=2)
+        ttk.Button(top, text="Add Files", command=self.add_files, style="Accent.TButton").pack(side="left", padx=2)
         ttk.Button(top, text="Add Folder", command=self.add_folder).pack(side="left", padx=2)
         ttk.Button(top, text="Passwords", command=self.open_passwords).pack(side="left", padx=2)
 
@@ -259,14 +320,15 @@ class App(tk.Tk):
         nav = ttk.Frame(right); nav.pack(fill="x", pady=(0, 4))
         ttk.Button(nav, text="Up", width=5, command=self.go_up).pack(side="left")
         self.path_var = tk.StringVar(value="/")
-        ttk.Label(nav, textvariable=self.path_var, relief="groove", anchor="w",
-                  padding=3).pack(side="left", fill="x", expand=True, padx=6)
+        ttk.Label(nav, textvariable=self.path_var, anchor="w", padding=(8, 4),
+                  background=TH.field, foreground=TH.muted)\
+            .pack(side="left", fill="x", expand=True, padx=6)
 
         cols = ("name", "size", "type", "modified", "source")
         self.tree = ttk.Treeview(right, columns=cols, show="headings", selectmode="extended")
-        for c, w in (("name", 320), ("size", 85), ("type", 90), ("modified", 125), ("source", 230)):
+        for c, w in (("name", 300), ("size", 95), ("type", 115), ("modified", 165), ("source", 170)):
             self.tree.heading(c, text=c.title(), command=lambda cc=c: self.sort_by(cc))
-            self.tree.column(c, width=w, anchor="w")
+            self.tree.column(c, width=w, anchor="w", stretch=(c == "name"))
         rvs = ttk.Scrollbar(right, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=rvs.set)
         rvs.pack(side="right", fill="y")
@@ -274,14 +336,14 @@ class App(tk.Tk):
         self.tree.bind("<Double-1>", self._on_row_activate)
         self.tree.bind("<Return>", self._on_row_activate)
         self.tree.bind("<BackSpace>", lambda e: self.go_up())
-        self.tree.tag_configure("dir", font=("Segoe UI", 9, "bold"))
+        self.tree.tag_configure("dir", font=(UI, 10, "bold"))
         self.pan.add(right, weight=4)
 
         # --- checked-out files (packed only while something is open)
         self.openbar = ttk.Frame(self, padding=(8, 4))
         self.open_var = tk.StringVar(value="")
         ttk.Label(self.openbar, textvariable=self.open_var, anchor="w",
-                  foreground="#8a4b00").pack(side="left", fill="x", expand=True)
+                  foreground=TH.warn).pack(side="left", fill="x", expand=True)
         ttk.Button(self.openbar, text="I'm done - close & wipe",
                    command=self.finish_open).pack(side="right", padx=3)
 
@@ -293,7 +355,9 @@ class App(tk.Tk):
             ttk.Button(self.bottombar, text=txt, command=cmd).pack(side="left", padx=3)
 
         self.status = tk.StringVar(value="")
-        ttk.Label(self, textvariable=self.status, relief="sunken", anchor="w").pack(fill="x", side="bottom")
+        ttk.Label(self, textvariable=self.status, anchor="w",
+                  padding=(12, 6), background=TH.bg2, foreground=TH.muted)\
+            .pack(fill="x", side="bottom")
         self._sort = ("name", False)
 
     def _menubar(self):
@@ -323,6 +387,21 @@ class App(tk.Tk):
         tools.add_command(label="Set up browser autofill...", command=self.setup_autofill)
         tools.add_command(label="Import passwords from browser...", command=self.import_passwords)
         bar.add_cascade(label="Tools", menu=tools)
+
+        view = tk.Menu(bar, tearoff=0)
+        view.add_command(label="Switch theme (System / Dark / Light)",
+                         command=self.cycle_theme)
+        bar.add_cascade(label="View", menu=view)
+
+        # The menuBAR strip is drawn by the window manager and ignores colours;
+        # the drop-downs do not, and aura.track keeps them on the palette
+        # through a theme flip. (This is why the Aura scaffold hides the native
+        # bar entirely - here the menus predate the retrofit and stay.)
+        for m in (bar, filem, tools, view, self._recent_menu):
+            try:
+                svtheme.aura.track(m, "menu")
+            except Exception:
+                pass
         self.configure(menu=bar)
 
     def _fill_recent_menu(self):
@@ -351,6 +430,40 @@ class App(tk.Tk):
             self.pan.sashpos(0, 250)
         except Exception:
             pass
+
+    # ---------- appearance
+    def cycle_theme(self):
+        """System -> Dark -> Light, saved so the choice survives a restart."""
+        pref = svtheme.next_pref()
+        svtheme.save_pref(pref)
+        self._retheme(pref)
+
+    def _system_theme(self, mode):
+        """The desktop flipped Aura Dark/Light - follow it, unless overridden."""
+        if svtheme.pref() != "system" or mode == TH.mode:
+            return
+        self._retheme()
+
+    def _retheme(self, pref=None):
+        """Rebuild the window in the resolved theme.
+
+        tk binds a colour when a widget is created, so a flip means building the
+        window again rather than repainting every widget in place and missing
+        some. Everything on screen is derived from the vault index, so the
+        rebuild costs a redraw - and never a re-unlock: the vault handle, the
+        open-file workspace and the autofill server all outlive the widgets."""
+        svtheme.apply(self, pref)
+        self.configure(bg=TH.bg)
+        for w in list(self.winfo_children()):
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self._build()
+        self._set_title()
+        self.reload()
+        self._refresh_open()
+        self.after(60, self._sash)
 
     # ---------- data
     def reload(self):
@@ -756,15 +869,17 @@ class App(tk.Tk):
         except sv.VaultError as ex:
             messagebox.showerror("SecureVault", str(ex)); return
         win = tk.Toplevel(self); win.title(f"Preview - {name}"); win.geometry("640x480")
+        win.configure(bg=TH.bg)
         ext = os.path.splitext(name)[1].lower()
         if ext in (".png", ".gif", ".ppm", ".pgm"):
             try:
                 img = tk.PhotoImage(data=data)
-                lbl = tk.Label(win, image=img); lbl.image = img; lbl.pack(expand=True)
+                lbl = tk.Label(win, image=img, bd=0, bg=TH.bg)
+                lbl.image = img; lbl.pack(expand=True)
                 return
             except Exception:
                 pass
-        txt = tk.Text(win, wrap="none")
+        txt = svtheme.text(win, wrap="none")
         try:
             preview = data[:200_000].decode("utf-8")
         except UnicodeDecodeError:
@@ -961,7 +1076,9 @@ class VaultChooser(tk.Toplevel):
     is 'new' or 'open', or None if cancelled. Paths only - never a secret."""
     def __init__(self, master, default_new=None, recent=None):
         super().__init__(master)
+        svtheme.ensure(self)
         self.title("SecureVault - choose a vault")
+        self.configure(bg=TH.bg)
         self.result = None
         self.default_new = default_new
         self.resizable(False, False)
@@ -1058,6 +1175,11 @@ def _unlock_vault_at(master, path):
 
 def main():
     root = tk.Tk(); root.withdraw()
+    # Aura before the FIRST window of the session. Everything from here on -
+    # the keylogger warning, the vault chooser, the unlock prompts and the PIN
+    # pad - is drawn before App() exists, so waiting until then would show the
+    # user a stack of default-grey dialogs and only then a themed window.
+    svtheme.apply(root, svtheme.load_pref())
 
     # best-effort keystroke-logging check before any secret is entered. The PIN
     # is click-entered regardless, so a keylogger cannot capture it either way.
@@ -1097,6 +1219,8 @@ def _show_secret_window(master, secret, uri):
     r"""Show the TOTP enrollment once: a scannable QR code (preferred) plus the
     secret and otpauth URI as text for manual entry."""
     win = tk.Toplevel(master); win.title("SecureVault - enroll authenticator")
+    svtheme.ensure(win)
+    win.configure(bg=TH.bg)
     win.grab_set()
     ttk.Label(win, padding=(10, 10, 10, 4), justify="left",
               text="Scan this with your authenticator app (shown once):").pack(anchor="w")
@@ -1108,12 +1232,13 @@ def _show_secret_window(master, secret, uri):
         qr_label.image = qr_img          # keep a reference or Tk drops the image
         qr_label.pack(padx=10, pady=4)
     else:
-        ttk.Label(win, padding=(10, 0), foreground="#b0700a", justify="left",
+        ttk.Label(win, padding=(10, 0), foreground=TH.warn, justify="left",
                   text="(QR unavailable - enter the secret below manually.)").pack(anchor="w")
 
     ttk.Label(win, padding=(10, 4, 10, 0), justify="left",
               text=f"Or enter it by hand -  Secret:  {secret}").pack(anchor="w")
-    txt = tk.Text(win, height=3, width=64, wrap="char"); txt.insert("1.0", uri)
+    txt = svtheme.text(win, height=3, width=64, wrap="char")
+    txt.insert("1.0", uri)
     txt.configure(state="disabled"); txt.pack(padx=10, pady=6)
     ttk.Label(win, padding=10, justify="left",
               text="Google Authenticator / Authy / Aegis / 1Password all work.\n"

@@ -23,14 +23,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import svpass
 import svtotp
 import svchrome
+import svtheme
+from svtheme import TH, UI, MONO
 
 
 class PasswordManager(tk.Toplevel):
     def __init__(self, master, vault):
         super().__init__(master)
+        svtheme.ensure(self)
         self.title("SecureVault - Passwords")
-        self.geometry("880x520")
-        self.minsize(720, 420)
+        self.configure(bg=TH.bg)
+        self.geometry("1020x580")
+        self.minsize(860, 460)
         self.store = svpass.PasswordStore(vault)
         self.store.load()
         self._clip_after = None
@@ -42,19 +46,38 @@ class PasswordManager(tk.Toplevel):
 
     # ---------------------------------------------------------------- layout
     def _build(self):
-        top = ttk.Frame(self, padding=6); top.pack(fill="x")
+        # Aura header + beam, so this window reads as part of the same app
+        # rather than a dialog that wandered in from another one.
+        head = ttk.Frame(self, padding=(12, 12, 12, 9)); head.pack(fill="x")
+        ttk.Label(head, text="Passwords", font=(UI, 13, "bold")).pack(side="left")
+        ttk.Label(head, foreground=TH.muted,
+                  text="stored in this vault - never on disk in the clear")\
+            .pack(side="left", padx=(14, 0))
+        svtheme.beam(self).pack(fill="x")
+
+        # TWO rows, not one. Seven buttons and a search field fitted on one row
+        # at the old 8pt; at the Aura type scale they ran off the edge of the
+        # window, which is how "Browsers..." became unreachable. Splitting by
+        # frequency also reads better: the things you do to an ENTRY on top,
+        # the things you do to the WHOLE STORE underneath.
+        top = ttk.Frame(self, padding=(6, 10, 6, 2)); top.pack(fill="x")
         ttk.Label(top, text="Search:").pack(side="left")
         self.q = tk.StringVar()
-        e = ttk.Entry(top, textvariable=self.q, width=40)
-        e.pack(side="left", padx=4); e.bind("<KeyRelease>", lambda _e: self.refresh())
+        e = ttk.Entry(top, textvariable=self.q)
+        e.pack(side="left", padx=6, fill="x", expand=True)
+        e.bind("<KeyRelease>", lambda _e: self.refresh())
         e.focus_set()
-        ttk.Button(top, text="Add", command=self.add).pack(side="left", padx=2)
+        ttk.Button(top, text="Add", command=self.add,
+                   style="Accent.TButton").pack(side="left", padx=2)
         ttk.Button(top, text="Edit", command=self.edit).pack(side="left", padx=2)
         ttk.Button(top, text="Delete", command=self.delete).pack(side="left", padx=2)
-        ttk.Button(top, text="Generate...", command=self.generate).pack(side="left", padx=2)
-        ttk.Button(top, text="Import Chrome CSV...", command=self.import_chrome).pack(side="left", padx=2)
-        ttk.Button(top, text="Audit...", command=self.audit).pack(side="left", padx=2)
-        ttk.Button(top, text="Browsers...", command=self.browsers).pack(side="left", padx=2)
+
+        tools = ttk.Frame(self, padding=(6, 2, 6, 6)); tools.pack(fill="x")
+        for txt, cmd in (("Generate...", self.generate),
+                         ("Import Chrome CSV...", self.import_chrome),
+                         ("Audit...", self.audit),
+                         ("Browsers...", self.browsers)):
+            ttk.Button(tools, text=txt, command=cmd).pack(side="left", padx=2)
 
         cols = ("title", "username", "domain", "strength", "twofa")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", selectmode="browse")
@@ -73,7 +96,8 @@ class PasswordManager(tk.Toplevel):
         ttk.Button(act, text="Copy TOTP", command=self.copy_totp).pack(side="left", padx=2)
         ttk.Button(act, text="Open URL in browser", command=self.open_url).pack(side="left", padx=2)
         self.status = tk.StringVar(value="")
-        ttk.Label(act, textvariable=self.status, foreground="#0a0").pack(side="right")
+        ttk.Label(act, textvariable=self.status,
+                  foreground=TH.good).pack(side="right")
 
     # ------------------------------------------------------------------ data
     def refresh(self):
@@ -298,7 +322,9 @@ class _EntryDialog(tk.Toplevel):
     'Generate' button; it is the only field that can hold a secret."""
     def __init__(self, master, title, entry=None):
         super().__init__(master)
+        svtheme.ensure(self)
         self.title(title)
+        self.configure(bg=TH.bg)
         self.resizable(False, False)
         self.grab_set()
         self.result = None
@@ -326,7 +352,7 @@ class _EntryDialog(tk.Toplevel):
         r += 1
         ttk.Label(self, text="(raw base32 or an otpauth:// URI)").grid(row=r, column=1, sticky="w", padx=6); r += 1
         ttk.Label(self, text="Notes").grid(row=r, column=0, sticky="ne", padx=6, pady=3)
-        self.notes = tk.Text(self, width=48, height=4)
+        self.notes = svtheme.text(self, width=48, height=4, font=(UI, 10))
         self.notes.insert("1.0", e.get("notes", ""))
         self.notes.grid(row=r, column=1, columnspan=2, sticky="w", padx=6); r += 1
         bar = ttk.Frame(self); bar.grid(row=r, column=0, columnspan=3, pady=8)
@@ -359,7 +385,9 @@ class _EntryDialog(tk.Toplevel):
 class _GenDialog(tk.Toplevel):
     def __init__(self, master):
         super().__init__(master)
+        svtheme.ensure(self)
         self.title("Generate password")
+        self.configure(bg=TH.bg)
         self.resizable(False, False)
         self.grab_set()
         self.result = None
@@ -612,10 +640,12 @@ class AutofillService:
             return
         verb_key, target_id = decision
         win = tk.Toplevel(self.app)
+        svtheme.ensure(win)
         win.title("SecureVault")
+        win.configure(bg=TH.bg)
         win.attributes("-topmost", True)
         verb = "Update" if verb_key == "update" else "Save"
-        ttk.Label(win, text=f"{verb} password for {dom}?", font=("Segoe UI", 10, "bold"),
+        ttk.Label(win, text=f"{verb} password for {dom}?", font=(UI, 11, "bold"),
                   padding=(12, 10, 12, 2)).pack(anchor="w")
         ttk.Label(win, text=f"{user or '(no username)'}  @  {dom}",
                   padding=(12, 0, 12, 8)).pack(anchor="w")
@@ -654,8 +684,10 @@ class BrowserPairingDialog(tk.Toplevel):
 
     def __init__(self, master, svc):
         super().__init__(master)
+        svtheme.ensure(self)
         self.svc = svc
         self.title("SecureVault - Paired Browsers")
+        self.configure(bg=TH.bg)
         self.geometry("640x400")
         self.transient(master)
         self._tick_after = None
@@ -664,9 +696,9 @@ class BrowserPairingDialog(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build(self):
-        ttk.Label(self, padding=(10, 10, 10, 2), font=("Segoe UI", 10, "bold"),
+        ttk.Label(self, padding=(10, 10, 10, 2), font=(UI, 11, "bold"),
                   text="Only paired browsers can read your passwords.").pack(anchor="w")
-        ttk.Label(self, padding=(10, 0, 10, 8), wraplength=600, foreground="#555",
+        ttk.Label(self, padding=(10, 0, 10, 8), wraplength=600, foreground=TH.muted,
                   text="Pairing gives one browser extension a key of its own. Anything "
                        "else that reaches SecureVault - a script, another program - is "
                        "refused even while the vault is unlocked. Revoke a browser here "
@@ -698,17 +730,20 @@ class BrowserPairingDialog(tk.Toplevel):
     def pair(self):
         win = self.svc.arm_pairing()
         top = tk.Toplevel(self)
+        svtheme.ensure(top)
         top.title("Pair a browser")
+        top.configure(bg=TH.bg)
         top.transient(self)
         top.attributes("-topmost", True)
-        ttk.Label(top, padding=(16, 14, 16, 2), font=("Segoe UI", 10),
+        ttk.Label(top, padding=(16, 14, 16, 2), font=(UI, 11),
                   text="In the browser, open the SecureVault Autofill extension\n"
                        "and enter this PIN:").pack(anchor="w")
-        ttk.Label(top, text=win.pin, font=("Consolas", 30, "bold"),
+        ttk.Label(top, text=win.pin, font=(MONO, 30, "bold"),
+                  foreground=TH.accent,
                   padding=(16, 6, 16, 6)).pack(anchor="w")
-        left = ttk.Label(top, padding=(16, 0, 16, 6), foreground="#555")
+        left = ttk.Label(top, padding=(16, 0, 16, 6), foreground=TH.muted)
         left.pack(anchor="w")
-        ttk.Label(top, padding=(16, 0, 16, 12), foreground="#555", wraplength=380,
+        ttk.Label(top, padding=(16, 0, 16, 12), foreground=TH.muted, wraplength=380,
                   text="The PIN works once and expires. If you did not just open the "
                        "extension yourself, close this window.").pack(anchor="w")
         ttk.Button(top, text="Cancel", command=lambda: self._cancel(top))\

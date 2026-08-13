@@ -27,7 +27,17 @@ def main():
     argv = sys.argv[1:]
     if argv:                       # any argument => CLI / shell action
         return sv.main(argv)
-    import svgui                   # no arguments => GUI browser
+    try:
+        import svgui               # no arguments => GUI browser
+    except ImportError as ex:
+        # The GUI pulls in the Aura design system (customtkinter + darkdetect).
+        # The frozen exe bundles them; a source checkout may not have them yet,
+        # and "ModuleNotFoundError: customtkinter" is not a useful thing to show
+        # somebody who just double-clicked the app.
+        sv.gui_info("SecureVault's window needs its display dependencies:\n\n"
+                    "    pip install -r requirements.txt\n\n"
+                    f"({ex})")
+        return 2
     svgui.main()
     return 0
 

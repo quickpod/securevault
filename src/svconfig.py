@@ -42,6 +42,7 @@ def load():
         if not isinstance(data, dict):
             return _default()
         data.setdefault("last_vault", None)
+        data.setdefault("theme", "system")
         rec = data.get("recent")
         data["recent"] = [str(p) for p in rec] if isinstance(rec, list) else []
         return data
@@ -50,7 +51,7 @@ def load():
 
 
 def _default():
-    return {"last_vault": None, "recent": []}
+    return {"last_vault": None, "recent": [], "theme": "system"}
 
 
 def save(cfg):
@@ -61,7 +62,8 @@ def save(cfg):
         tmp = config_path() + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"last_vault": cfg.get("last_vault"),
-                       "recent": list(cfg.get("recent", []))[:MAX_RECENT]},
+                       "recent": list(cfg.get("recent", []))[:MAX_RECENT],
+                       "theme": cfg.get("theme", "system")},
                       f, indent=2)
         os.replace(tmp, config_path())
         return True
@@ -90,6 +92,23 @@ def remember_vault(path):
     recent = [p for p in cfg.get("recent", []) if os.path.abspath(p) != path]
     recent.insert(0, path)
     cfg["recent"] = recent[:MAX_RECENT]
+    save(cfg)
+
+
+def theme():
+    """Appearance preference: "system" (follow the desktop), "dark", "light".
+
+    A preference, not a secret - it belongs in the same paths-only file rather
+    than anywhere near the vault.
+    """
+    return load().get("theme", "system")
+
+
+def set_theme(value):
+    if value not in ("system", "dark", "light"):
+        return
+    cfg = load()
+    cfg["theme"] = value
     save(cfg)
 
 

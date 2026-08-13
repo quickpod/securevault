@@ -27,6 +27,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import svtheme
+from svtheme import TH, UI, MONO
 
 HOST_NAME = "com.securevault.autofill"
 IS_WINDOWS = sys.platform.startswith("win")
@@ -198,16 +200,26 @@ class Wizard(tk.Toplevel):
     standalone (used by the module smoke test)."""
 
     def __init__(self, master, title, step_classes, state=None):
+        # NOT `self._root`: that name is tkinter's own Misc._root METHOD, and
+        # Toplevel.__init__ calls it (`root = self._root()`) while building the
+        # widget. Shadowing it with a window - or with None - made every
+        # Wizard(...) call die with "'NoneType'/'Tk' object is not callable"
+        # before a single step was drawn, whoever the master was.
         self._owns_root = master is None
         if self._owns_root:
-            self._root = tk.Tk()
-            self._root.withdraw()
-            super().__init__(self._root)
+            self._own_root = tk.Tk()
+            self._own_root.withdraw()
+            super().__init__(self._own_root)
         else:
-            self._root = None
+            self._own_root = None
             super().__init__(master)
 
+        # The wizard is routinely the FIRST window in the process (it is
+        # launched straight from the CLI), so it applies Aura itself rather
+        # than assuming svgui already did.
+        svtheme.ensure(self._own_root or self)
         self.title(title)
+        self.configure(bg=TH.bg)
         self.state = state if state is not None else {}
         self.geometry("640x520")
         self.minsize(520, 420)
@@ -221,11 +233,13 @@ class Wizard(tk.Toplevel):
 
         head = ttk.Frame(outer, padding=(16, 12, 16, 8))
         head.pack(fill="x")
-        self.head_title = ttk.Label(head, text="", font=("Segoe UI", 13, "bold"))
+        self.head_title = ttk.Label(head, text="", font=(UI, 15, "bold"))
         self.head_title.pack(anchor="w")
-        self.head_step = ttk.Label(head, text="", foreground="#666")
+        self.head_step = ttk.Label(head, text="", foreground=TH.muted)
         self.head_step.pack(anchor="w")
-        ttk.Separator(outer, orient="horizontal").pack(fill="x")
+        # The Aura accent beam instead of a hairline rule: the same mark under
+        # the header that every other QuickOpen window carries.
+        svtheme.beam(outer).pack(fill="x")
 
         self.body = ttk.Frame(outer, padding=(16, 12))
         self.body.pack(fill="both", expand=True)
@@ -279,7 +293,7 @@ class Wizard(tk.Toplevel):
         """A selectable read-only text block (for steps/paths/logs)."""
         frame = ttk.Frame(parent)
         frame.pack(fill="both", expand=True, pady=(0, 8))
-        txt = tk.Text(frame, height=height, wrap="word", relief="solid", bd=1)
+        txt = svtheme.text(frame, height=height, wrap="word", font=(UI, 10))
         vs = ttk.Scrollbar(frame, orient="vertical", command=txt.yview)
         txt.configure(yscrollcommand=vs.set)
         vs.pack(side="right", fill="y")
@@ -345,16 +359,16 @@ class Wizard(tk.Toplevel):
         try:
             self.destroy()
         finally:
-            if self._owns_root and self._root is not None:
+            if self._owns_root and self._own_root is not None:
                 try:
-                    self._root.destroy()
+                    self._own_root.destroy()
                 except Exception:
                     pass
 
     def run_modal(self):
         """Block until the wizard closes (used for standalone launches)."""
-        if self._owns_root and self._root is not None:
-            self._root.wait_window(self)
+        if self._owns_root and self._own_root is not None:
+            self._own_root.wait_window(self)
         else:
             self.wait_window(self)
 
@@ -382,7 +396,7 @@ class _AFIntro(WizardStep):
                 "NOTE: this machine is not Windows. The wizard will render and "
                 "explain each step, but the browser/registry actions are Windows-"
                 "only and will be reported as skipped.",
-                foreground="#b0700a")
+                foreground=TH.warn)
 
 
 class _AFDetect(WizardStep):
@@ -407,7 +421,7 @@ class _AFDetect(WizardStep):
             self.wiz.para(parent,
                 "No Chromium browsers were detected on this machine. You can still "
                 "proceed and load the extension into any Chromium browser by hand.",
-                foreground="#b0700a")
+                foreground=TH.warn)
 
     def on_next(self):
         chosen = [k for k, v in self.vars.items() if v.get()]
@@ -565,7 +579,7 @@ class _AFConfirmId(WizardStep):
         self.entry = ttk.Entry(row, textvariable=self.id_var)
         self.entry.pack(side="left", fill="x", expand=True, padx=(6, 6))
         ttk.Button(row, text="Use this ID", command=self._apply_id).pack(side="left")
-        self.msg = ttk.Label(parent, text="", foreground="#0a7a0a", justify="left")
+        self.msg = ttk.Label(parent, text="", foreground=TH.good, justify="left")
         self.msg.pack(anchor="w")
 
     @staticmethod
@@ -696,7 +710,7 @@ class _IMExport(WizardStep):
         self._keys = keys
         self.steps_txt = self.wiz.readonly_text(parent, "", height=7)
         self._render()
-        warn = tk.Text(parent, height=5, wrap="word", relief="solid", bd=1)
+        warn = svtheme.text(parent, height=5, wrap="word", font=(UI, 10))
         warn.pack(fill="x", pady=(4, 0))
         warn.insert("1.0",
             "SECURITY WARNING\n"
@@ -705,7 +719,7 @@ class _IMExport(WizardStep):
             "NEVER onto a removable or network drive, or a synced folder "
             "(OneDrive/Dropbox). This wizard securely shreds the CSV right after "
             "importing it.")
-        warn.configure(state="disabled", foreground="#a11")
+        warn.configure(state="disabled", foreground=TH.bad)
 
     def _render(self):
         key = self._keys[self.combo.current()]
@@ -892,7 +906,7 @@ class _IMShred(WizardStep):
         self.wiz.state["shredded"] = ok
         self._done = True
         self.msg.configure(
-            foreground=("#0a7a0a" if ok else "#a11"),
+            foreground=(TH.good if ok else TH.bad),
             text=("Shredded and deleted the CSV." if ok else
                   "Could not delete the CSV - remove it by hand."))
         messagebox.showinfo(

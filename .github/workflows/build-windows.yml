@@ -22,7 +22,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install build deps
-        run: python -m pip install --upgrade pip cryptography segno pyinstaller
+        run: python -m pip install --upgrade pip cryptography segno customtkinter darkdetect pyinstaller
 
       - name: Build SecureVault.exe
         working-directory: src
@@ -31,14 +31,18 @@ jobs:
           --icon ../securevault.ico
           --version-file ../packaging/version.txt
           --add-data "../securevault.ico;."
+          --add-data "../securevault.png;."
           --collect-submodules cryptography
           --collect-submodules segno
+          --collect-all customtkinter
           --hidden-import svgui --hidden-import svopen --hidden-import svshell
           --hidden-import svsec --hidden-import svtotp --hidden-import svpass
           --hidden-import svpassgui --hidden-import svauth --hidden-import svipc
           --hidden-import svchrome --hidden-import svbundle
           --hidden-import svqr --hidden-import svconfig --hidden-import svwizard
           --hidden-import svautofill_setup
+          --hidden-import svtheme --hidden-import aura
+          --hidden-import customtkinter --hidden-import darkdetect
           sv_app.py
 
       - name: Build svhost.exe (native messaging host)

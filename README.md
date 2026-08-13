@@ -67,6 +67,7 @@ kind - even through a dependency. The only secret is the one you type.
 | Portable secret bundle | Small `.svb` file (separate from the vault) to move TOTP seeds / recovery phrases between devices. |
 | Explorer right-click menu | "Send to SV", "Send folder to SV", "Open Secure Vault" - registered per-user (HKCU), no admin. |
 | CLIs & self-tests | `SecureVault.exe`/`sv_app.py` CLI, `pw` password CLI, and a suite of self-tests. |
+| Aura light & dark | The QuickOpen design system across every window - vault browser, password manager, PIN pad, setup wizards. Follows the desktop's light/dark live; **View -> Switch theme** (or the header control) pins *System / Dark / Light*, saved with the app's other non-secret preferences. |
 
 ### Windows hardening scripts (repo root)
 
