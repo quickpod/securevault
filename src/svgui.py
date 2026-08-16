@@ -20,12 +20,13 @@ Runs as a standalone window. No OS keychain / registry / DPAPI is used for
 secrets; the only secret is the password you type, held in memory for this
 session and never stored.
 """
-import os, sys, threading, time
+import os, queue, sys, threading, time
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import securevault as sv
+import svlock
 import svsec
 import svopen
 import svshell
@@ -237,6 +238,19 @@ class App(tk.Tk):
             self.after(300, self._tray_events)
             if self.tray._started:
                 self._tray_state()         # process was already trayed once
+        # SYSTEM auto-lock triggers (1.0.9, owner field feedback: the vault
+        # must never lock mid-work). Primary: desktop lock / screensaver /
+        # suspend, watched by svlock.Monitor on its own thread and marshalled
+        # here via a queue. Fallback: the _autolock_tick timer below, measured
+        # against SYSTEM input idle - so using other apps counts as activity.
+        self._sys_events = queue.Queue()
+        self._sysmon = svlock.Monitor(self._sys_events.put)
+        try:
+            self._sysmon.start()
+        except Exception:
+            pass
+        self.after(500, self._sys_events_tick)
+        self.after(30_000, self._autolock_tick)
         # first successful open on this machine turns login-autostart on by
         # default (explicit off in Preferences is never overridden)
         try:
@@ -1136,7 +1150,10 @@ class App(tk.Tk):
     # ---------- background (tray) mode
     def note_activity(self):
         """Thread-safe: autofill worker threads call this on every authorized
-        request so background use keeps the idle auto-lock at bay."""
+        request. Since 1.0.9 this is only the LAST-RESORT idle signal, used
+        when no system input-idle source exists (svlock.idle_ms() -> None) -
+        autofill activity by itself no longer keeps the vault unlocked; real
+        keyboard/mouse input does."""
         self._last_activity = time.time()
 
     def _tray_events(self):
@@ -1176,7 +1193,7 @@ class App(tk.Tk):
         self._last_activity = time.time()
         self._tray_state()
         self.withdraw()
-        self.after(30_000, self._autolock_tick)
+        # (the auto-lock tick has run since __init__ - nothing extra to start)
         return True
 
     def _show_from_tray(self):
@@ -1188,19 +1205,58 @@ class App(tk.Tk):
         except Exception:
             pass
 
+    def _sys_events_tick(self):
+        """Drain svlock.Monitor events (desktop lock / screensaver / suspend;
+        they arrive on the monitor's thread) onto the Tk thread. The primary
+        auto-lock trigger: fires for a VISIBLE window too - if the desktop
+        locked, the user is not looking at it. Desktop unlock is never
+        observed, so it can never unlock anything."""
+        locked = False
+        try:
+            while True:
+                evt = self._sys_events.get_nowait()
+                import svconfig
+                if (evt in (svlock.EVENT_DESKTOP_LOCK, svlock.EVENT_SUSPEND)
+                        and svconfig.lock_on_desktop_lock() and not locked):
+                    locked = True
+                    self._lock_from_tray()
+        except queue.Empty:
+            pass
+        except Exception:
+            pass                            # teardown races
+        if not locked:
+            try:
+                self.after(500, self._sys_events_tick)
+            except Exception:
+                pass
+
     def _autolock_tick(self):
-        """Background auto-lock: a trayed vault must never stay unlocked
-        indefinitely. Idle = no autofill activity since the window was hidden.
-        Only enforced while trayed; a visible window is the user's business."""
-        if not self._trayed:
-            return
+        """FALLBACK auto-lock: TRUE system input idle (keyboard/mouse anywhere
+        on the machine - XScreenSaverQueryInfo / GetLastInputInfo), never app
+        interaction, so it cannot fire while the user works in another app
+        (the 1.0.8 field defect). 0 = off (allowed; the desktop-lock trigger
+        is primary). Only when NO system idle source exists at all does the
+        old app-activity measure return, and then only for a trayed window."""
         import svconfig
-        limit = svconfig.autolock_minutes() * 60
-        idle_since = max(self._tray_since, self._last_activity)
-        if time.time() - idle_since >= limit:
-            self._lock_from_tray()
-            return
-        self.after(30_000, self._autolock_tick)
+        limit_min = svconfig.idle_lock_minutes()
+        if limit_min > 0:
+            idle = svlock.idle_ms()
+            if idle is not None:
+                if svlock.idle_exceeded(idle, limit_min):
+                    self._lock_from_tray()
+                    return
+            elif self._trayed:
+                # last resort (no X11/DBus/Win32 idle source): the pre-1.0.9
+                # behaviour, so a background vault still can't stay unlocked
+                # forever on a machine where idle can't be measured.
+                idle_since = max(self._tray_since, self._last_activity)
+                if time.time() - idle_since >= limit_min * 60:
+                    self._lock_from_tray()
+                    return
+        try:
+            self.after(30_000, self._autolock_tick)
+        except Exception:
+            pass
 
     def _lock_from_tray(self):
         """Lock while keeping the process (and tray icon) alive: stop the
@@ -1229,6 +1285,20 @@ class App(tk.Tk):
             pass
         if self.tray is not None:
             self.tray.set_state(False)
+
+    def destroy(self):
+        """Every exit path (lock, quit, close, vault switch) funnels through
+        Tk destroy - stop the system-lock monitor with the window so a
+        LOCKED process never keeps DBus/message-pump watchers alive (there is
+        nothing left for them to lock; the next unlock starts fresh ones)."""
+        mon = getattr(self, "_sysmon", None)
+        if mon is not None:
+            self._sysmon = None
+            try:
+                mon.stop()
+            except Exception:
+                pass
+        super().destroy()
 
     # ---------- shutdown
     def _on_close(self):
@@ -1286,8 +1356,10 @@ class _CloseChoiceDialog(tk.Toplevel):
                   style="Muted.TLabel",
                   text="Running in the background keeps browser autofill "
                        "available while the window is closed (a tray icon "
-                       "shows the state; it auto-locks after being idle). "
-                       "Closing locks the vault and stops autofill.").pack(anchor="w")
+                       "shows the state; it locks with your desktop and "
+                       "after real keyboard/mouse inactivity - never while "
+                       "you're working). Closing locks the vault and stops "
+                       "autofill.").pack(anchor="w")
         ttk.Checkbutton(self, text="Remember my choice (change it later in "
                                    "Tools > Preferences)",
                         variable=self.remember).pack(anchor="w", padx=16)
@@ -1331,18 +1403,27 @@ class PreferencesDialog(tk.Toplevel):
             ttk.Radiobutton(self, text=label, value=val,
                             variable=self.close_var).pack(anchor="w", padx=24)
         ttk.Label(self, padding=(16, 12, 16, 4), font=(UI, 10, "bold"),
-                  text="Background auto-lock:").pack(anchor="w")
-        row = ttk.Frame(self, padding=(24, 0, 16, 0)); row.pack(anchor="w")
-        ttk.Label(row, text="Lock the trayed vault after").pack(side="left")
-        self.mins = tk.IntVar(value=svconfig.autolock_minutes())
-        ttk.Spinbox(row, from_=svconfig.AUTOLOCK_MIN, to=svconfig.AUTOLOCK_MAX,
+                  text="Auto-lock:").pack(anchor="w")
+        self.desklock = tk.BooleanVar(value=svconfig.lock_on_desktop_lock())
+        ttk.Checkbutton(self, text="Lock when the desktop locks or the "
+                                   "screensaver starts (also before sleep)",
+                        variable=self.desklock).pack(anchor="w", padx=24)
+        idle_now = svconfig.idle_lock_minutes()
+        self.idle_on = tk.BooleanVar(value=idle_now > 0)
+        row = ttk.Frame(self, padding=(24, 2, 16, 0)); row.pack(anchor="w")
+        ttk.Checkbutton(row, text="Also lock after",
+                        variable=self.idle_on).pack(side="left")
+        self.mins = tk.IntVar(
+            value=idle_now if idle_now > 0 else svconfig.DEFAULT_IDLE_MIN)
+        ttk.Spinbox(row, from_=svconfig.IDLE_MIN, to=svconfig.IDLE_MAX,
                     textvariable=self.mins, width=5).pack(side="left", padx=6)
-        ttk.Label(row, text="idle minutes").pack(side="left")
+        ttk.Label(row, text="minutes without keyboard/mouse input").pack(side="left")
         ttk.Label(self, padding=(24, 2, 16, 0), style="Muted.TLabel",
                   wraplength=420, justify="left",
-                  text="Autofill requests count as activity. There is no "
-                       "'never': a background vault must not stay unlocked "
-                       "indefinitely.").pack(anchor="w")
+                  text="Idle means no keyboard or mouse input anywhere on "
+                       "this computer - working in other apps counts as "
+                       "activity, so the vault never locks mid-work. "
+                       "Unlocking the desktop never unlocks the vault.").pack(anchor="w")
         ttk.Label(self, padding=(16, 12, 16, 4), font=(UI, 10, "bold"),
                   text="Startup:").pack(anchor="w")
         import svautostart
@@ -1360,7 +1441,23 @@ class PreferencesDialog(tk.Toplevel):
     def _save(self):
         import svconfig, svautostart
         svconfig.set_on_close(self.close_var.get())
-        svconfig.set_autolock_minutes(self.mins.get())
+        svconfig.set_lock_on_desktop_lock(self.desklock.get())
+        try:
+            mins = max(svconfig.IDLE_MIN, min(svconfig.IDLE_MAX,
+                                              int(self.mins.get())))
+        except (ValueError, tk.TclError):
+            mins = svconfig.DEFAULT_IDLE_MIN
+        svconfig.set_idle_lock_minutes(mins if self.idle_on.get() else 0)
+        if not self.desklock.get() and not self.idle_on.get():
+            # both triggers off: legal, but never silently
+            messagebox.showwarning(
+                "SecureVault - auto-lock is OFF",
+                "You have turned off BOTH auto-lock triggers.\n\n"
+                "An unlocked vault (including one running in the tray) will "
+                "now stay unlocked indefinitely - until you lock it yourself "
+                "or quit. Anyone at this desk can read it and use autofill.\n\n"
+                "Recommended: keep at least 'Lock when the desktop locks' "
+                "enabled.", parent=self)
         svconfig.set_autostart(self.autostart.get())
         svautostart.apply_pref(self.autostart.get())
         self.destroy()

@@ -299,12 +299,25 @@ LOCKED, as a tray icon only. No window opens and nothing prompts you; unlock
 whenever you need it, and autofill is one unlock away instead of "find and
 launch the app first". Turn this off (or back on) in Tools > Preferences.
 
-## Auto-lock
+## Auto-lock - locks with your desktop, never mid-work
 
-A background vault must not stay unlocked forever. After a period of
-inactivity in the tray (default 15 minutes; autofill requests count as
-activity) it locks itself. Set the timeout in Tools > Preferences - there is
-deliberately no "never".
+The vault locks itself when YOU are away, and never while you are working:
+
+* PRIMARY: the moment the DESKTOP locks - the lock screen or screensaver
+  comes on (lock shortcut, idle lock, lid close), or the machine goes to
+  sleep - the vault locks with it. A resumed or unlocked desktop always
+  finds the vault LOCKED: unlocking the desktop never unlocks the vault,
+  that still takes all three factors.
+* FALLBACK: after 30 minutes (configurable) without any keyboard or mouse
+  input anywhere on this computer. Typing in your browser or any other app
+  counts as activity - the timer watches the machine's real input idle, not
+  vault interaction, so it cannot fire under your hands mid-work.
+
+Both triggers apply to the visible window and the tray alike, and both are
+in Tools > Preferences. The input timer may be set to "never" because the
+desktop-lock trigger normally covers you; turning BOTH off is allowed but
+warned about clearly - the vault would then stay unlocked until you lock it
+yourself.
 
 ## Nothing secret in the tray
 

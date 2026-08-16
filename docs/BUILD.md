@@ -36,6 +36,8 @@ py selftest_pw.py         # password manager: store, search, generator, audit, C
 py selftest_auth.py       # extension pairing + request-signing rules (refusals)
 py selftest_pairing.py    # end-to-end autofill over a real vault
 py selftest_bundle.py     # portable .svb bundle format + merge rules
+py selftest_ipc.py        # autofill transport: token handshake, fail-closed teardown
+py selftest_lock.py       # auto-lock triggers: desktop-lock/suspend mapping, system idle, migration
 ```
 
 ## Build the .exe with PyInstaller

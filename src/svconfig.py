@@ -62,7 +62,9 @@ def load():
         data.setdefault("last_vault", None)
         data.setdefault("theme", "system")
         data.setdefault("on_close", "ask")
-        data.setdefault("autolock_minutes", DEFAULT_AUTOLOCK_MIN)
+        data.setdefault("lock_on_desktop_lock", True)
+        if "idle_lock_minutes" not in data:
+            data["idle_lock_minutes"] = _migrate_idle(data.get("autolock_minutes"))
         data.setdefault("autostart", None)   # None = never decided (no vault yet)
         rec = data.get("recent")
         data["recent"] = [str(p) for p in rec] if isinstance(rec, list) else []
@@ -71,17 +73,39 @@ def load():
         return _default()
 
 
-# Background mode must never become an indefinite unlocked state: the trayed
-# app auto-locks after this many idle minutes (no window, no autofill
-# activity). Clamped, never zero/"off".
-DEFAULT_AUTOLOCK_MIN = 15
-AUTOLOCK_MIN, AUTOLOCK_MAX = 1, 240
+# Auto-lock (reworked after 1.0.8 field feedback: the old timer counted only
+# vault/autofill interaction as activity, so working in OTHER apps looked
+# "idle" and the vault locked mid-work):
+#   lock_on_desktop_lock  PRIMARY - lock when the desktop locks / screensaver
+#                         starts / machine suspends. Default ON.
+#   idle_lock_minutes     FALLBACK - lock after this many minutes without
+#                         keyboard/mouse input ANYWHERE on the machine
+#                         (system input idle, not app interaction). 0 = never;
+#                         allowed only because the desktop-lock trigger is the
+#                         primary guard - the UI warns when BOTH are off.
+DEFAULT_IDLE_MIN = 30
+IDLE_MIN, IDLE_MAX = 1, 240
+
+
+def _migrate_idle(old):
+    """Map the pre-1.0.9 'autolock_minutes' (app-interaction idle while
+    trayed, default 15) onto the system-input idle setting: a value the user
+    customised is kept, the old default becomes the new default (the two
+    measure different things - 15 minutes of TOTAL input idle is much
+    stricter than 15 minutes of app idle ever was)."""
+    try:
+        old = int(old)
+    except (TypeError, ValueError):
+        return DEFAULT_IDLE_MIN
+    if old == 15:                          # the old DEFAULT_AUTOLOCK_MIN
+        return DEFAULT_IDLE_MIN
+    return max(IDLE_MIN, min(IDLE_MAX, old))
 
 
 def _default():
     return {"last_vault": None, "recent": [], "theme": "system",
-            "on_close": "ask", "autolock_minutes": DEFAULT_AUTOLOCK_MIN,
-            "autostart": None}
+            "on_close": "ask", "lock_on_desktop_lock": True,
+            "idle_lock_minutes": DEFAULT_IDLE_MIN, "autostart": None}
 
 
 def save(cfg):
@@ -95,7 +119,9 @@ def save(cfg):
                        "recent": list(cfg.get("recent", []))[:MAX_RECENT],
                        "theme": cfg.get("theme", "system"),
                        "on_close": cfg.get("on_close", "ask"),
-                       "autolock_minutes": autolock_minutes(cfg),
+                       "lock_on_desktop_lock":
+                           bool(cfg.get("lock_on_desktop_lock", True)),
+                       "idle_lock_minutes": idle_lock_minutes(cfg),
                        "autostart": cfg.get("autostart")},
                       f, indent=2)
         os.replace(tmp, config_path())
@@ -119,20 +145,36 @@ def set_on_close(value):
     save(cfg)
 
 
-def autolock_minutes(cfg=None):
-    """Idle minutes before a BACKGROUND (trayed) vault locks itself. Always a
-    sane positive number - there is deliberately no 'never'."""
+def lock_on_desktop_lock(cfg=None):
+    """PRIMARY auto-lock trigger: lock the vault when the desktop locks, the
+    screensaver starts, or the machine suspends. Default True."""
+    return bool((cfg or load()).get("lock_on_desktop_lock", True))
+
+
+def set_lock_on_desktop_lock(value):
+    cfg = load()
+    cfg["lock_on_desktop_lock"] = bool(value)
+    save(cfg)
+
+
+def idle_lock_minutes(cfg=None):
+    """FALLBACK auto-lock: minutes of system-wide keyboard/mouse inactivity
+    before the vault locks. 0 = never (permitted because desktop-lock is the
+    primary trigger); positive values are clamped to IDLE_MIN..IDLE_MAX."""
     try:
-        v = int((cfg or load()).get("autolock_minutes", DEFAULT_AUTOLOCK_MIN))
+        v = int((cfg or load()).get("idle_lock_minutes", DEFAULT_IDLE_MIN))
     except (TypeError, ValueError):
-        v = DEFAULT_AUTOLOCK_MIN
-    return max(AUTOLOCK_MIN, min(AUTOLOCK_MAX, v))
+        v = DEFAULT_IDLE_MIN
+    if v <= 0:
+        return 0
+    return max(IDLE_MIN, min(IDLE_MAX, v))
 
 
-def set_autolock_minutes(value):
+def set_idle_lock_minutes(value):
+    """Set the idle threshold (minutes); 0 (or negative) = never."""
     cfg = load()
     try:
-        cfg["autolock_minutes"] = int(value)
+        cfg["idle_lock_minutes"] = max(0, int(value))
     except (TypeError, ValueError):
         return
     save(cfg)

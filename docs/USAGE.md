@@ -389,8 +389,16 @@ mode is what keeps browser autofill available while no window is on screen:
   where no vault has ever been opened. Linux: `~/.config/autostart/` entry (stops firing
   automatically if the package is removed); Windows: per-user HKCU Run value (removed by
   `uninstall.ps1`).
-- **Auto-lock:** a trayed vault locks itself after an idle period (default 15 minutes;
-  autofill requests count as activity; configurable 1-240 minutes, never "off").
+- **Auto-lock: locks with your desktop — never mid-work.** The primary trigger is your
+  desktop: the vault locks the moment the desktop locks or the screensaver starts (lock
+  shortcut, idle lock, lid close) and before the machine sleeps — a resumed or unlocked
+  desktop always finds the vault locked, and unlocking the desktop never unlocks the
+  vault (that still takes all three factors). The fallback is a timer against **true
+  system input idle** — keyboard/mouse activity anywhere on the machine counts, not just
+  vault use, so the vault never locks while you're working in another app (default 30
+  minutes, configurable 1-240 or "never"). Both knobs are in **Tools -> Preferences**;
+  turning both off is allowed but clearly warned about, since the vault would then stay
+  unlocked indefinitely. Applies to the visible window and the tray alike.
 - The tooltip/menu never show paths, entry names or secrets.
 
 ---
