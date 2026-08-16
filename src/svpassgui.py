@@ -469,8 +469,8 @@ class AutofillService:
 
     # ---- lifecycle
     def start(self):
-        if os.name != "nt":
-            return False
+        # Windows: named pipe. Linux: AF_UNIX socket in the 0700 runtime dir.
+        # Same server, same handshake, same handler - svipc owns the difference.
         self._token = svipc.issue_token()
         self._server = svipc.PipeServer(self._handle, self._token)
         self._server.start()
@@ -582,6 +582,14 @@ class AutofillService:
         # and every save() appends to it, so recording a timestamp on each
         # autofill would grow the container for nothing. Cosmetic data only.
         self._last_used[req.get("client_id", "")] = time.time()
+        # background mode: authorized autofill traffic counts as activity for
+        # the tray auto-lock timer (note_activity is thread-safe)
+        note = getattr(self.app, "note_activity", None)
+        if note:
+            try:
+                note()
+            except Exception:
+                pass
 
         if op == "generate":
             try:

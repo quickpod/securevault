@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SecureVault Autofill",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Fill, suggest, save and update passwords from your local SecureVault. No cloud - talks only to the SecureVault app on this machine.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -33,7 +33,19 @@
   ],
   "action": {
     "default_title": "SecureVault Autofill",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
   },
-  "icons": {}
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqC16w2sGrCgk/P63fw6S6obJJKjzo78lbJ+RstDIgH5qichn4/TKJ978oqhYsUvXZOiufzeGaMCT7doGlsrodxkNVORA23J8U6DHcnzWyLHQNwJvc/43LaDm38zr00hoNakY3oJo9MfdOMhisYMQxANhBfAtsAkp9afxUnw+cqHhqYolL9NB1UDv7BKBYvEK1L2eNT0XGUH9JsiYLjMMFH8xwwbiQbs3bdpqE17ZD1fVZWzeeCi1yYg9ab4GqhdGKqF8qj4Zj5no/tTsUI1/V4ohrlIzH3MSfHuwydrBiOo367Kl8Yp3LHi4TccWQQ4Geqt6ItKNT7zRjqTut/q0AwIDAQAB"
 }

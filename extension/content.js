@@ -11,6 +11,15 @@
 // narrowed to the pair(s) for THAT identity, so you are never offered another
 // account's password. With no identity present yet, every pair for the site is
 // offered and picking one fills both halves together.
+//
+// UI rules (this file's overlays):
+//   * everything lives in SHADOW DOM hosts appended to <html>, never injected
+//     into the page's own tree, so site CSS/layout is untouched;
+//   * light/dark follows prefers-color-scheme;
+//   * the menu is keyboard-first: arrows move, Enter picks, Escape closes;
+//   * a small vault badge sits inside detected password fields - the standard
+//     way back into the menu after it was dismissed;
+//   * nothing secret is rendered: passwords stay masked bullets.
 
 (function () {
   "use strict";
@@ -107,40 +116,200 @@
     if (login.password) setValue(pwField, login.password);
   }
 
-  // ---- floating menu
-  let menuEl = null;
-  function closeMenu() { if (menuEl) { menuEl.remove(); menuEl = null; } }
+  // ---------------------------------------------------------------- theming
+  function palette() {
+    const dark = window.matchMedia &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches;
+    return dark ? {
+      bg: "#1d2029", text: "#e8eaf1", muted: "#9aa1b2", border: "#333846",
+      hover: "#2a3152", accent: "#7c90ff", shadow: "0 6px 18px rgba(0,0,0,.55)",
+    } : {
+      bg: "#ffffff", text: "#1c1e26", muted: "#5c6270", border: "#d8dbe4",
+      hover: "#e3e8ff", accent: "#4f6bff", shadow: "0 6px 18px rgba(20,24,40,.22)",
+    };
+  }
+
+  // A tiny inline padlock mark so both overlays are recognisably SecureVault
+  // without needing web-accessible resources.
+  function lockSvg(colour, size) {
+    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" ` +
+      `xmlns="http://www.w3.org/2000/svg" aria-hidden="true">` +
+      `<rect x="4.5" y="10" width="15" height="10" rx="2.5" stroke="${colour}" stroke-width="2"/>` +
+      `<path d="M8 10V7a4 4 0 0 1 8 0v3" stroke="${colour}" stroke-width="2"/>` +
+      `<circle cx="12" cy="15" r="1.6" fill="${colour}"/></svg>`;
+  }
+
+  // ---- floating menu (shadow-DOM host; keyboard-first)
+  let menuHost = null;
+  let menuItems = [];        // [{action}] in render order
+  let menuActive = -1;
+  let menuRows = [];
+
+  function closeMenu() {
+    if (menuHost) { menuHost.remove(); menuHost = null; }
+    menuItems = []; menuRows = []; menuActive = -1;
+  }
+
+  function highlight(idx) {
+    const p = palette();
+    menuRows.forEach((row, i) => {
+      row.style.background = i === idx ? p.hover : "transparent";
+    });
+    menuActive = idx;
+    if (idx >= 0 && menuRows[idx]) menuRows[idx].scrollIntoView({ block: "nearest" });
+  }
+
   function showMenu(anchor, items) {
     closeMenu();
     if (!items.length) return;
+    const p = palette();
     const r = anchor.getBoundingClientRect();
-    menuEl = document.createElement("div");
-    menuEl.style.cssText = [
-      "position:absolute", "z-index:2147483647",
-      `left:${window.scrollX + r.left}px`, `top:${window.scrollY + r.bottom + 2}px`,
-      `min-width:${Math.max(r.width, 240)}px`, "background:#fff", "color:#111",
-      "border:1px solid #888", "border-radius:6px", "box-shadow:0 4px 14px rgba(0,0,0,.25)",
-      "font:13px system-ui,Segoe UI,sans-serif", "overflow:hidden", "max-height:320px", "overflow-y:auto"
-    ].join(";");
-    for (const it of items) {
+    const width = Math.min(360, Math.max(r.width, 260));
+    const estH = Math.min(320, 34 + items.length * 36);
+
+    // Clamp into the viewport; flip above the field when the bottom is tight.
+    let left = window.scrollX + r.left;
+    const maxLeft = window.scrollX + document.documentElement.clientWidth - width - 6;
+    left = Math.max(window.scrollX + 6, Math.min(left, maxLeft));
+    let top = window.scrollY + r.bottom + 2;
+    if (r.bottom + estH > window.innerHeight && r.top - estH > 0) {
+      top = window.scrollY + r.top - estH - 2;
+    }
+
+    menuHost = document.createElement("div");
+    menuHost.style.cssText =
+      `position:absolute;z-index:2147483647;left:${left}px;top:${top}px;width:${width}px`;
+    const root = menuHost.attachShadow({ mode: "closed" });
+    root.innerHTML = `<style>
+      .menu { background:${p.bg}; color:${p.text}; border:1px solid ${p.border};
+              border-radius:8px; box-shadow:${p.shadow};
+              font:13px system-ui,"Segoe UI",sans-serif; overflow:hidden;
+              max-height:${estH}px; display:flex; flex-direction:column; }
+      .head { display:flex; align-items:center; gap:6px; padding:6px 10px;
+              font-size:11px; font-weight:600; color:${p.muted};
+              border-bottom:1px solid ${p.border}; flex:none; }
+      .list { overflow-y:auto; }
+      .row { padding:8px 10px; cursor:pointer; display:flex; gap:8px;
+             align-items:baseline; min-width:0; }
+      .row .main { font-weight:600; white-space:nowrap; overflow:hidden;
+                   text-overflow:ellipsis; max-width:60%; flex:none; }
+      .row .sub { color:${p.muted}; font-size:12px; white-space:nowrap;
+                  overflow:hidden; text-overflow:ellipsis; min-width:0; }
+      .row .only { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    </style>`;
+    const menu = document.createElement("div");
+    menu.className = "menu";
+    const head = document.createElement("div");
+    head.className = "head";
+    head.innerHTML = lockSvg(p.accent, 12) + "<span>SecureVault</span>";
+    menu.appendChild(head);
+    const list = document.createElement("div");
+    list.className = "list";
+    menuItems = items;
+    menuRows = [];
+    items.forEach((it, i) => {
       const row = document.createElement("div");
-      row.style.cssText = "padding:8px 10px;cursor:pointer;white-space:nowrap;display:flex;gap:8px;align-items:center";
+      row.className = "row";
       if (it.sub) {
-        const main = document.createElement("span"); main.textContent = it.label; main.style.fontWeight = "600";
-        const sub = document.createElement("span"); sub.textContent = it.sub; sub.style.color = "#666"; sub.style.fontSize = "12px";
+        const main = document.createElement("span");
+        main.className = "main"; main.textContent = it.label; main.title = it.label;
+        const sub = document.createElement("span");
+        sub.className = "sub"; sub.textContent = it.sub; sub.title = it.sub;
         row.append(main, sub);
       } else {
-        row.textContent = it.label;
+        const only = document.createElement("span");
+        only.className = "only"; only.textContent = it.label; only.title = it.label;
+        row.append(only);
       }
-      row.addEventListener("mouseenter", () => row.style.background = "#eef");
-      row.addEventListener("mouseleave", () => row.style.background = "#fff");
+      row.addEventListener("mouseenter", () => highlight(i));
+      row.addEventListener("mouseleave", () => highlight(-1));
       row.addEventListener("mousedown", (e) => { e.preventDefault(); closeMenu(); it.action(); });
-      menuEl.appendChild(row);
-    }
-    document.body.appendChild(menuEl);
+      list.appendChild(row);
+      menuRows.push(row);
+    });
+    menu.appendChild(list);
+    root.appendChild(menu);
+    document.documentElement.appendChild(menuHost);
   }
-  document.addEventListener("click", (e) => { if (menuEl && !menuEl.contains(e.target)) closeMenu(); }, true);
+
+  document.addEventListener("click", (e) => {
+    if (menuHost && !e.composedPath().includes(menuHost)) closeMenu();
+  }, true);
   window.addEventListener("scroll", closeMenu, true);
+
+  // Keyboard: arrows move, Enter picks, Escape closes. Capture phase so the
+  // page doesn't see the keys we consume while our menu is open.
+  document.addEventListener("keydown", (e) => {
+    if (!menuHost) return;
+    if (e.key === "Escape") { closeMenu(); e.preventDefault(); e.stopPropagation(); return; }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const n = menuItems.length;
+      const next = e.key === "ArrowDown"
+        ? (menuActive + 1) % n
+        : (menuActive - 1 + n) % n;
+      highlight(next);
+      e.preventDefault(); e.stopPropagation();
+      return;
+    }
+    if (e.key === "Enter" && menuActive >= 0) {
+      const it = menuItems[menuActive];
+      closeMenu(); it.action();
+      e.preventDefault(); e.stopPropagation();
+    }
+  }, true);
+
+  // ---- in-field badge: the way back into the menu after dismissing it.
+  // A shadow-DOM overlay positioned over the field's right edge - nothing is
+  // injected into the field or its form, so site layout cannot break.
+  const badges = new Map();   // field -> host element
+
+  function badgeFor(field) {
+    if (badges.has(field)) return badges.get(field);
+    const host = document.createElement("div");
+    const size = 18;
+    host.style.cssText =
+      "position:absolute;z-index:2147483646;width:18px;height:18px;" +
+      "cursor:pointer;display:none";
+    const root = host.attachShadow({ mode: "closed" });
+    const p = palette();
+    root.innerHTML =
+      `<div style="width:18px;height:18px;opacity:.75" title="SecureVault: show saved logins">` +
+      lockSvg(p.accent, size) + `</div>`;
+    host.addEventListener("mousedown", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      field.focus();
+      offer(field);
+    });
+    document.documentElement.appendChild(host);
+    badges.set(field, host);
+    return host;
+  }
+
+  function positionBadges() {
+    for (const [field, host] of badges) {
+      if (!field.isConnected || field.offsetParent === null) {
+        host.style.display = "none";
+        if (!field.isConnected) { host.remove(); badges.delete(field); }
+        continue;
+      }
+      const r = field.getBoundingClientRect();
+      if (r.width < 60 || r.height < 16) { host.style.display = "none"; continue; }
+      host.style.display = "block";
+      host.style.left = (window.scrollX + r.right - 24) + "px";
+      host.style.top = (window.scrollY + r.top + (r.height - 18) / 2) + "px";
+    }
+  }
+
+  function ensureBadges() {
+    document.querySelectorAll('input[type=password]').forEach((pw) => {
+      if (pw.offsetParent !== null) badgeFor(pw);
+    });
+    positionBadges();
+  }
+
+  window.addEventListener("resize", positionBadges, true);
+  window.addEventListener("scroll", positionBadges, true);
+  setInterval(positionBadges, 1500);       // SPAs move things without events
 
   // ---- build and show the offer for whatever field was focused
   let lastAnchor = null;
@@ -148,11 +317,11 @@
     lastAnchor = anchor;
     const pwField = pwFieldFor(anchor);
     const anchorIsUser = !isPw(anchor);
-    if (!pwField && !anchorIsUser) return;   // nothing we can help with here
+    if (!pwField && !anchorIsUser) return false; // nothing we can help with here
     const r = await call({ op: "query" });
     if (!r || !r.ok) {
       if (r && r.error) showMenu(anchor, [{ label: "SecureVault: " + r.error, action: () => {} }]);
-      return;
+      return false;
     }
     const refField = pwField || anchor;       // for scope + identity reading
     const identity = enteredIdentity(refField);
@@ -194,6 +363,7 @@
       });
     }
     showMenu(anchor, items);
+    return items.length > 0;
   }
 
   function looksLikeSignup(pwField) {
@@ -207,6 +377,20 @@
     if (isPw(el) || looksLikeUserField(el)) offer(el);
   }, true);
 
+  // "Fill on this page" from the popup: open the menu on the login form.
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (!msg || msg.op !== "sv-fill") return false;
+    const pws = Array.from(document.querySelectorAll('input[type=password]'))
+      .filter((el) => el.offsetParent !== null);
+    const target = pws[0] ||
+      Array.from(document.querySelectorAll("input")).find(looksLikeUserField);
+    if (!target) { sendResponse({ ok: false, error: "no login form on this page" }); return false; }
+    target.focus();
+    offer(target).then((shown) =>
+      sendResponse(shown ? { ok: true } : { ok: false, error: "no saved logins for this site" }));
+    return true;
+  });
+
   // ---- auto-fill when the site has EXACTLY ONE saved login
   // No click needed for the common case. Skips signup/new-password forms and
   // never overwrites a value you've already typed. Multi-account sites still
@@ -215,6 +399,7 @@
   const visible = (el) => el && el.offsetParent !== null;
 
   async function autoFillSingle() {
+    ensureBadges();
     if (autoFilled) return;
     const pws = Array.from(document.querySelectorAll('input[type=password]')).filter(visible);
     if (pws.length !== 1) return;          // a login form has one password field
@@ -239,7 +424,7 @@
 
   // as the user types their email, re-narrow the open menu in place
   document.addEventListener("input", (e) => {
-    if (menuEl && lastAnchor && looksLikeUserField(e.target)) offer(lastAnchor);
+    if (menuHost && lastAnchor && looksLikeUserField(e.target)) offer(lastAnchor);
   }, true);
 
   // ---- on submit, report the credential so the app can offer save/update
@@ -253,7 +438,7 @@
     if (cap) call({ op: "save", username: cap.username, password: cap.password });
   }, true);
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && isPw(e.target) && e.target.value) {
+    if (e.key === "Enter" && isPw(e.target) && e.target.value && !menuHost) {
       call({ op: "save", username: enteredIdentity(e.target), password: e.target.value });
     }
   }, true);

@@ -1,0 +1,12 @@
+#!/bin/sh
+# SecureVault native-messaging host launcher (Linux).
+#
+# The browser launches this with the extension origin in argv and speaks the
+# native-messaging framing on stdio; svhost.py relays each message to the
+# running, unlocked SecureVault app over its per-user AF_UNIX socket
+# ($XDG_RUNTIME_DIR/securevault/autofill.sock). This process holds no keys.
+#
+# Resolves its own location so the same file works from the installed package
+# (/opt/quickopen/securevault/nativehost/svhost) and from a source checkout.
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+exec python3 "$HERE/../src/svhost.py" "$@"

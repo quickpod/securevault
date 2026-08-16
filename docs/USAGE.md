@@ -65,7 +65,9 @@ you like - and SecureVault remembers your choice between runs.
 
 **Precedence**, highest first: `--dat`/`--vault` -> the `SECUREVAULT_DAT` environment
 variable -> the last-used vault remembered from a previous run (if the file still exists) ->
-the default `SecureVault.dat` next to the program.
+the default `SecureVault.dat` next to the program (Windows) or
+`~/.local/share/securevault/SecureVault.dat` (Linux, where the program dir is read-only).
+Vault files are byte-identical across OSes - copy a `.dat` between Windows and Linux freely.
 
 > **Where the "remembered" location is stored:** a tiny, **non-secret** settings file at
 > `%LOCALAPPDATA%\SecureVault\config.json`. It holds only **paths** (the last-used vault and
@@ -238,8 +240,13 @@ Windows, or resetting your profile, and it repoints every verb.
 ## Browser autofill setup
 
 Autofill is **local-only**: the Chrome/Edge MV3 extension talks to a native-messaging host,
-which relays over a Windows named pipe to the **running, unlocked** vault. The host holds no
-keys and can decrypt nothing; if the app is closed or locked, every request fails.
+which relays to the **running, unlocked** vault - over a Windows named pipe, or on Linux over
+a per-user UNIX socket in `$XDG_RUNTIME_DIR/securevault/` (0700 directory, 0600 socket, gone
+at logout). The host holds no keys and can decrypt nothing; if the app is closed or locked,
+every request fails. The same PIN pairing and per-request signatures apply on both OSes.
+
+The in-app **Help menu (F1)** carries the same walkthroughs - "Browser autofill & pairing"
+and "Install the extension" - with an *Open extension folder* button.
 
 ### The setup wizard (recommended)
 
@@ -259,10 +266,33 @@ offered right after you create a new vault). The wizard:
    `allowed_origins` to match.
 6. **Summarizes** what was configured per browser, how to test, and how to remove it later.
 
-On a non-Windows machine the wizard still opens and explains each step, but the
-browser/registry actions report "Windows only" instead of running.
+### Linux / Quick OS
 
-The manual equivalent is:
+On Linux the pieces are pre-wired by the packages:
+
+- **Quick Browser ships the extension pre-installed** - nothing to load. Open the vault,
+  **Passwords -> Browsers... -> Pair a browser**, type the PIN into the extension popup, done.
+- The **native-messaging host manifests are installed system-wide** by the
+  `quickopen-securevault` package for Quick Browser/Chromium (`/etc/chromium/native-messaging-hosts/`),
+  Google Chrome (`/etc/opt/chrome/native-messaging-hosts/`) and Microsoft Edge
+  (`/etc/opt/edge/native-messaging-hosts/`), all pointing at
+  `/opt/quickopen/securevault/nativehost/svhost`.
+- **Chrome/Edge manual install (developer mode, once):** open `chrome://extensions` /
+  `edge://extensions`, enable **Developer mode**, click **Load unpacked** and select
+
+  ```
+  /opt/quickopen/securevault/extension
+  ```
+
+  The manifest carries a pinned key, so the browser assigns the same extension ID the host
+  manifests already allow - pairing works with no further setup.
+- The wizard (**Tools -> Set up browser autofill...**) additionally writes *per-user* host
+  manifests (`~/.config/<browser>/NativeMessagingHosts/`) for Chromium/Brave or any browser
+  the system manifests missed.
+- The autofill endpoint is `$XDG_RUNTIME_DIR/securevault/autofill.sock`, created only while
+  the vault is open and unlocked, with the same HMAC-token handshake as the Windows pipe.
+
+The manual **Windows** equivalent is:
 
 **1. Generate the bridge config files.** From the install/source dir:
 
@@ -294,12 +324,13 @@ the extension past the Harden-Chrome blocklist.
 3. Confirm the extension ID matches the one `svautofill_setup.py status` /
    `Install-BrowserFill.ps1` printed.
 
-> **On the checked-in template files:** the published `nativehost` manifest ships with a
-> placeholder origin (`chrome-extension://EXTENSION_ID_AFTER_LOAD/`) and the extension
-> `manifest.json` ships with **no** pinned `key`. Step 1 (`svautofill_setup.py apply`) - run
-> by the installer - generates a fresh key/ID for *your* machine and writes the real values.
-> If you load the extension without running it first, Chrome assigns a random ID each load;
-> run `apply`, then reload the extension so the IDs line up.
+> **On the checked-in template files:** the extension `manifest.json` ships with a pinned
+> `key` (the project's public signing key), so on Linux every install derives the same
+> extension ID and the packaged host manifests match out of the box. On Windows the
+> installer/wizard still runs `svautofill_setup.py apply`, which generates a fresh per-machine
+> key/ID and rewrites the manifest + `allowed_origins` together - both flows keep the IDs
+> lined up; the Windows `nativehost` template's placeholder origin
+> (`chrome-extension://EXTENSION_ID_AFTER_LOAD/`) is replaced by that step.
 
 **4. Pair a browser.** In the vault: **Passwords -> Browsers... -> Pair a browser**. The app
 shows a one-time 6-digit PIN (120s window). In the browser's SecureVault popup, enter that
@@ -310,7 +341,35 @@ signed over a fresh, single-use challenge bound to the operation and origin. You
 
 Autofill then offers matching logins on login pages, suggests known usernames/emails on
 signups, can generate strong passwords, and prompts to save/update - all confirmed in the
-app. **It only works while `SecureVault.exe` is open and unlocked.**
+app. **It only works while SecureVault is open and unlocked** (window or background mode).
+
+Day-to-day, in the browser:
+
+- The dropdown is keyboard-first (arrows / Enter / Escape), follows the page's light/dark
+  scheme, and carries the SecureVault mark so it can't be mistaken for a site's own UI.
+- A small **vault badge inside password fields** reopens the menu after it was dismissed.
+- The toolbar **popup** live-updates (unlock the vault and it flips to "connected" by
+  itself), distinguishes *app not running* (offers **Open SecureVault**) from *vault
+  locked*, shows the current site's saved-login count, and has **Fill on this page**,
+  **Generate password** (copies it) and **Open vault** actions. The PIN box is digits-only
+  and auto-pairs on the 6th digit.
+
+---
+
+## Background mode (tray)
+
+Closing the window with an open vault asks: **Run in background** or **Close & lock**
+(with a *remember my choice* box; change it later in **Tools -> Preferences**). Background
+mode is what keeps browser autofill available while no window is on screen:
+
+- A tray icon shows the state - green dot = unlocked (autofill available), grey = locked.
+  Windows notification area; on Linux/Quick OS a Plasma StatusNotifier.
+- **Open SecureVault** brings the window back. **Lock now** locks immediately: the autofill
+  endpoint disappears, the transport token is destroyed, and decrypted scratch copies are
+  wiped - identical to closing the window. **Quit** locks and exits.
+- **Auto-lock:** a trayed vault locks itself after an idle period (default 15 minutes;
+  autofill requests count as activity; configurable 1-240 minutes, never "off").
+- The tooltip/menu never show paths, entry names or secrets.
 
 ---
 

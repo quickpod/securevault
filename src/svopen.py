@@ -240,7 +240,15 @@ class Workspace:
         with self._lock:
             if self.dir and os.path.isdir(self.dir):
                 return self.dir
-            self.dir = tempfile.mkdtemp(prefix="securevault-open-")
+            # POSIX: prefer $XDG_RUNTIME_DIR - per-user 0700 tmpfs, so staged
+            # plaintext lives in RAM and vanishes at logout even if the wipe
+            # never runs. Windows (and the no-session fallback) keeps tempdir.
+            base = None
+            if not IS_WINDOWS:
+                rt = os.environ.get("XDG_RUNTIME_DIR")
+                if rt and os.path.isdir(rt):
+                    base = rt
+            self.dir = tempfile.mkdtemp(prefix="securevault-open-", dir=base)
             _lock_down(self.dir)
             return self.dir
 

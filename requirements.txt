@@ -3,3 +3,5 @@ cryptography>=41
 segno>=1.5          # TOTP enrollment QR codes (dependency-free)
 customtkinter>=5.2  # Aura design system: ttk/tk theming layer (MIT)
 darkdetect>=0.8     # OS light/dark appearance + live change signal (BSD)
+pystray>=0.19       # background-mode tray icon (import is guarded app-side)
+Pillow>=10          # tray icon composition (pystray needs PIL images)

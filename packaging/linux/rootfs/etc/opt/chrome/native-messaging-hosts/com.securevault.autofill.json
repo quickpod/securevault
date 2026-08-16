@@ -1,0 +1,9 @@
+{
+  "name": "com.securevault.autofill",
+  "description": "SecureVault Autofill host",
+  "path": "/opt/quickopen/securevault/nativehost/svhost",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://nlcomhaocphghgjjmmcbpkclbjnkifnl/"
+  ]
+}

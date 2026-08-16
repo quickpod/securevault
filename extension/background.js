@@ -132,7 +132,8 @@ async function setClientId(id) {
 function browserLabel() {
   const ua = navigator.userAgent || "";
   const name = /Edg\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : "Browser";
-  const plat = /Windows/.test(ua) ? "Windows" : /Mac OS/.test(ua) ? "macOS" : "";
+  const plat = /Windows/.test(ua) ? "Windows" : /Mac OS/.test(ua) ? "macOS" :
+               /Linux|X11/.test(ua) ? "Linux" : "";
   return plat ? `${name} on ${plat}` : name;
 }
 
@@ -208,8 +209,49 @@ async function status() {
   const ping = await nativeCall({ op: "ping" });
   const clientId = await getClientId();
   const hasKey = !!(await loadKeyPair());
+  // app_running comes from the host (it checks the app's presence marker), so
+  // the popup can tell "not installed/running" from "running but locked".
   return { ok: !!ping.ok, error: ping.error || "",
-           serving: !!ping.serving, paired: !!(clientId && hasKey) };
+           serving: !!ping.serving, paired: !!(clientId && hasKey),
+           app_running: !!ping.app_running };
+}
+
+// ---------------------------------------------------------- popup helpers
+// The popup is extension UI, not a page, so privileged requests made on its
+// behalf take the ACTIVE TAB's origin (activeTab is granted the moment the
+// user opens the popup). Only counts/usernames go back - never passwords.
+async function activeTabInfo() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = tabs && tabs[0];
+  if (!tab || !tab.url || !/^https?:/.test(tab.url)) return { tab: null, origin: "" };
+  return { tab, origin: new URL(tab.url).origin };
+}
+
+async function popupSite() {
+  const { origin } = await activeTabInfo();
+  if (!origin) return { ok: true, domain: "" };
+  const r = await signedCall("query", { origin });
+  if (!r.ok) return r;
+  const logins = r.logins || [];
+  return { ok: true, domain: new URL(origin).hostname, count: logins.length,
+           usernames: logins.slice(0, 3).map((l) => l.username || "") };
+}
+
+async function popupFill() {
+  const { tab } = await activeTabInfo();
+  if (!tab) return { ok: false, error: "no active page" };
+  return new Promise((res) => {
+    chrome.tabs.sendMessage(tab.id, { op: "sv-fill" }, (r) => {
+      if (chrome.runtime.lastError) {
+        res({ ok: false, error: "this page has no login form" });
+      } else res(r || { ok: false });
+    });
+  });
+}
+
+async function popupGenerate(length) {
+  const { origin } = await activeTabInfo();
+  return signedCall("generate", { origin: origin || "", length: length || 24 });
 }
 
 // -------------------------------------------------------------------- routing
@@ -230,6 +272,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (op === "ping") { nativeCall({ op: "ping" }).then(sendResponse); return true; }
+  if (op === "open-app") { nativeCall({ op: "open_app" }).then(sendResponse); return true; }
+  if (op === "popup-site") { popupSite().then(sendResponse); return true; }
+  if (op === "popup-fill") { popupFill().then(sendResponse); return true; }
+  if (op === "popup-generate") {
+    popupGenerate(msg.length).then(sendResponse); return true;
+  }
 
   if (!PRIVILEGED.includes(op)) {
     sendResponse({ ok: false, error: "bad op" });

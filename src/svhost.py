@@ -82,6 +82,48 @@ def _caller_origin():
 _RELAY_OPS = {"ping", "register", "challenge",
               "query", "save", "update", "generate", "identities"}
 
+# ops the host answers ITSELF, never relayed. open_app launches the vault app
+# when it is not running (the popup's "Open SecureVault" button); it carries
+# no data and grants nothing - the launched app still demands all three
+# factors before anything unlocks.
+_LOCAL_OPS = {"open_app"}
+
+
+def _app_launcher():
+    """The command that starts the SecureVault app on this machine."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if os.name == "nt":
+        for cand in (os.path.join(os.path.dirname(here), "SecureVault.exe"),
+                     os.path.join(here, "SecureVault.exe")):
+            if os.path.isfile(cand):
+                return [cand]
+        return [sys.executable, os.path.join(here, "sv_app.py")]
+    wrapper = "/usr/bin/quickopen-securevault"
+    if os.access(wrapper, os.X_OK):
+        return [wrapper]
+    return [sys.executable, os.path.join(here, "sv_app.py")]
+
+
+def _open_app():
+    import svipc
+    if svipc.app_running():
+        # never start a second instance (two would fight over the socket);
+        # the running one is a tray/window click away
+        return {"ok": True, "already_running": True}
+    try:
+        import subprocess
+        kw = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+              "stderr": subprocess.DEVNULL}
+        if os.name == "nt":
+            kw["creationflags"] = 0x00000008 | 0x00000200   # DETACHED + NEW_GROUP
+        else:
+            kw["start_new_session"] = True
+        subprocess.Popen(_app_launcher(), **kw)
+        return {"ok": True, "started": True}
+    except Exception as ex:
+        _log("open_app failed", ex)
+        return {"ok": False, "error": "could not start SecureVault"}
+
 # Fields copied through to the vault. A whitelist, not a passthrough: the relay
 # decides the shape of what reaches the handler, so a malformed or padded
 # message from the browser cannot smuggle extra keys into the request dict.
@@ -107,6 +149,9 @@ def main():
         if msg is None:
             return 0
         op = (msg or {}).get("op")
+        if op in _LOCAL_OPS:
+            _write_msg(_open_app())
+            continue
         if op not in _RELAY_OPS:
             _write_msg({"ok": False, "error": f"unsupported op {op!r}"})
             continue
@@ -114,6 +159,9 @@ def main():
         req = {k: msg[k] for k in _RELAY_FIELDS if k in msg}
         req["caller"] = caller
         reply = svipc.call(req)
+        if not reply.get("ok") and "not open/unlocked" in (reply.get("error") or ""):
+            # different instructions for the user: start the app vs unlock it
+            reply["app_running"] = svipc.app_running()
         _write_msg(reply)
 
 

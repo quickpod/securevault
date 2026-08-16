@@ -26,8 +26,13 @@
 !extension/*.json
 !extension/*.html
 !extension/*.css
+!extension/icons/*.png
 !nativehost/*.json
 !nativehost/*.bat
+# Linux native-messaging host launcher (no extension) + the system-dir host
+# manifests the deb overlays into /etc/{chromium,opt/chrome,opt/edge}
+!nativehost/svhost
+!packaging/linux/rootfs/**
 !ios/**
 # ---- docs, packaging, CI, and branding (safe, public)
 !docs/*.md

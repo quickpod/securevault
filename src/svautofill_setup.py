@@ -143,6 +143,106 @@ def status(root):
     return out
 
 
+# --------------------------------------------------------------------- linux
+# On Linux the extension identity is FIXED at build time: the repo manifest
+# carries a pinned "key" (public half of the project signing key held in the
+# build CA area), so the ID is the same for the packed .crx Quick Browser
+# pre-installs, an external install, and a dev-mode "Load unpacked". The
+# system-wide native-messaging host manifests for Quick Browser/Chromium,
+# Chrome and Edge ship in the deb (packaging/linux/rootfs/etc/...); the
+# functions below cover the per-user case (other Chromium browsers, or a
+# non-deb checkout) by writing the same manifest into the browser's user-level
+# NativeMessagingHosts dir.
+
+def app_root():
+    """The installed/checkout root that holds extension/ and nativehost/."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def shipped_ext_id(root=None):
+    """Extension ID derived from the pinned manifest "key" - no private key
+    involved (the ID is a hash of the PUBLIC key, same derivation Chromium
+    uses). Empty string if the manifest has no key (unconfigured checkout)."""
+    root = root or app_root()
+    try:
+        with open(os.path.join(root, "extension", "manifest.json"),
+                  encoding="utf-8") as f:
+            key_b64 = json.load(f).get("key", "")
+        der = base64.b64decode(key_b64)
+        digest = hashlib.sha256(der).digest()[:16]
+        return "".join(chr(ord("a") + (b >> 4)) + chr(ord("a") + (b & 0x0F))
+                       for b in digest)
+    except Exception:
+        return ""
+
+
+# system host-manifest locations the debs install into, and the per-user
+# equivalents each browser consults (Chromium keeps user-level manifests under
+# its user-data dir; Chrome/Edge under their own dotted dirs)
+LINUX_SYSTEM_HOST_DIRS = [
+    "/etc/chromium/native-messaging-hosts",          # Quick Browser + Chromium
+    "/etc/opt/chrome/native-messaging-hosts",        # Google Chrome
+    "/etc/opt/edge/native-messaging-hosts",          # Microsoft Edge
+]
+
+def linux_user_host_dirs():
+    home = os.path.expanduser("~")
+    cfg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+    return [
+        os.path.join(cfg, "chromium", "NativeMessagingHosts"),
+        os.path.join(cfg, "google-chrome", "NativeMessagingHosts"),
+        os.path.join(cfg, "microsoft-edge", "NativeMessagingHosts"),
+        os.path.join(cfg, "BraveSoftware", "Brave-Browser", "NativeMessagingHosts"),
+    ]
+
+
+def linux_host_manifest(root=None, ext_id=None):
+    root = root or app_root()
+    ext_id = ext_id or shipped_ext_id(root)
+    return {
+        "name": HOST_NAME,
+        "description": "SecureVault Autofill host",
+        "path": os.path.join(root, "nativehost", "svhost"),
+        "type": "stdio",
+        "allowed_origins": [f"chrome-extension://{ext_id}/"],
+    }
+
+
+def linux_apply_user(root=None, ext_id=None, dirs=None):
+    """Write the per-user host manifests. Returns {written: [...], ext_id}."""
+    root = root or app_root()
+    ext_id = ext_id or shipped_ext_id(root)
+    if not ext_id:
+        raise RuntimeError("extension/manifest.json has no pinned key - "
+                           "cannot derive the extension ID")
+    manifest = linux_host_manifest(root, ext_id)
+    written = []
+    for d in (dirs if dirs is not None else linux_user_host_dirs()):
+        try:
+            os.makedirs(d, exist_ok=True)
+            p = os.path.join(d, HOST_NAME + ".json")
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2)
+            written.append(p)
+        except OSError:
+            pass
+    return {"written": written, "ext_id": ext_id,
+            "origin": f"chrome-extension://{ext_id}/",
+            "extdir": os.path.join(root, "extension")}
+
+
+def linux_status(root=None):
+    root = root or app_root()
+    ext_id = shipped_ext_id(root)
+    sys_present = [d for d in LINUX_SYSTEM_HOST_DIRS
+                   if os.path.isfile(os.path.join(d, HOST_NAME + ".json"))]
+    user_present = [os.path.join(d, HOST_NAME + ".json")
+                    for d in linux_user_host_dirs()
+                    if os.path.isfile(os.path.join(d, HOST_NAME + ".json"))]
+    return {"ext_id": ext_id, "extdir": os.path.join(root, "extension"),
+            "system_manifests": sys_present, "user_manifests": user_present}
+
+
 if __name__ == "__main__":
     action = sys.argv[1] if len(sys.argv) > 1 else "status"
     root = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "SecureVault")

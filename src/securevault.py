@@ -63,11 +63,41 @@ if os.name == "nt":
 def _disable_network():
     """Enforce 'no inbound or outbound connections of any kind'. We import no
     network modules, but this neutralises sockets at runtime so that not even a
-    bundled dependency can open, accept, or dial a connection."""
+    bundled dependency can open, accept, or dial a connection.
+
+    One carve-out, POSIX only: the AF_UNIX family. The Linux autofill bridge
+    (svipc) is an AF_UNIX socket in the user's 0700 runtime dir - the exact
+    equivalent of the Windows named pipe, which never went through the socket
+    module at all. AF_UNIX is filesystem IPC on this machine: it has no route,
+    no port and no remote peer, so allowing it does not weaken 'no network'.
+    AF_INET/AF_INET6/anything routable stays blocked on both OSes, as do the
+    dial-out helpers (create_connection etc.)."""
     import socket
     def _blocked(*a, **k):
         raise OSError("SecureVault: network access is permanently disabled")
-    for attr in ("socket", "socketpair", "create_connection", "create_server",
+    if os.name != "nt" and hasattr(socket, "AF_UNIX"):
+        real_socket = socket.socket
+        af_unix = socket.AF_UNIX
+
+        class _UnixOnlySocket(real_socket):
+            def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+                # fileno-based construction is how accept() wraps an already-
+                # accepted AF_UNIX connection; the family check still applies
+                # because accept() passes the listener's family through.
+                if family not in (af_unix, -1) or (family == -1 and fileno is None):
+                    _blocked()
+                super().__init__(family, type, proto, fileno)
+
+        try:
+            socket.socket = _UnixOnlySocket
+        except Exception:
+            pass
+    else:
+        try:
+            socket.socket = _blocked
+        except Exception:
+            pass
+    for attr in ("socketpair", "create_connection", "create_server",
                  "fromfd", "fromshare"):
         if hasattr(socket, attr):
             try: setattr(socket, attr, _blocked)
@@ -133,6 +163,10 @@ class Vault:
     def create(self, password: bytes):
         if self.exists():
             raise VaultError(f"vault already exists: {self.path}")
+        # the default location may not exist yet (e.g. ~/.local/share/securevault
+        # on a fresh Linux profile); creating it here keeps every caller honest
+        parent = os.path.dirname(os.path.abspath(self.path))
+        os.makedirs(parent, exist_ok=True)
         import svtotp
         salt = os.urandom(16)
         kek = derive_kek(password, salt)
@@ -426,15 +460,26 @@ def gui_info(msg, title="SecureVault"):
 
 # --------------------------------------------------------------------------- cli
 def default_dat():
-    """LAST-RESORT vault location: next to the exe (frozen) or this script.
-    Prefer resolve_dat() for the full precedence chain; this is only its final
-    fallback. The SECUREVAULT_DAT override is still honoured here for callers
-    (and older code paths) that use default_dat() directly."""
+    """LAST-RESORT vault location. Prefer resolve_dat() for the full precedence
+    chain; this is only its final fallback. The SECUREVAULT_DAT override is
+    still honoured here for callers (and older code paths) that use
+    default_dat() directly.
+
+    Windows keeps the historical 'next to the exe/script' default. On Linux the
+    program lives in read-only /opt (the deb), so 'next to the script' can
+    never hold a vault; the default is the XDG data dir instead
+    (~/.local/share/securevault/SecureVault.dat) - unless a dev checkout
+    already has a vault next to the source, which keeps working."""
     if os.environ.get("SECUREVAULT_DAT"):
         return os.environ["SECUREVAULT_DAT"]
     base = os.path.dirname(sys.executable if getattr(sys, "frozen", False)
                            else os.path.abspath(__file__))
-    return os.path.join(base, "SecureVault.dat")
+    legacy = os.path.join(base, "SecureVault.dat")
+    if os.name == "nt" or os.path.isfile(legacy):
+        return legacy
+    data_home = os.environ.get("XDG_DATA_HOME") or \
+        os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(data_home, "securevault", "SecureVault.dat")
 
 
 def resolve_dat(explicit=None, remember=True):

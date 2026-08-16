@@ -20,7 +20,7 @@ Runs as a standalone window. No OS keychain / registry / DPAPI is used for
 secrets; the only secret is the password you type, held in memory for this
 session and never stored.
 """
-import os, sys, threading
+import os, sys, threading, time
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
@@ -182,13 +182,18 @@ def build_folder_map(index):
 
 
 class App(tk.Tk):
-    def __init__(self, vault):
+    def __init__(self, vault, tray=None):
         super().__init__()
         # Aura first: tk fixes a widget's colours when it is created, so a
         # theme applied after _build() would only reach whatever came next.
         svtheme.apply(self, svtheme.load_pref())
         self.configure(bg=TH.bg)
         self.vault = vault
+        self.tray = tray                   # shared svtray.Tray (or None)
+        self._trayed = False               # window withdrawn, running in tray
+        self._tray_since = 0.0
+        self._locked_to_tray = False       # tells main() to keep the process
+        self._last_activity = time.time()
         self.ws = svopen.Workspace(vault)
         self.cwd = ""                      # folder currently shown, "" = root
         self.index = {}
@@ -222,6 +227,11 @@ class App(tk.Tk):
         # freshly-created vaults may want the autofill wizard offered once
         if getattr(vault, "_sv_freshly_created", False):
             self.after(600, self._maybe_offer_wizard)
+        # tray-menu intents (Open/Lock/Quit) arrive via a queue; drain on Tk
+        if self.tray is not None:
+            self.after(300, self._tray_events)
+            if self.tray._started:
+                self._tray_state()         # process was already trayed once
 
     def _set_title(self):
         self.title(f"SecureVault — {os.path.basename(self.vault.path)} "
@@ -374,10 +384,11 @@ class App(tk.Tk):
         bar.add_cascade(label="File", menu=filem)
 
         tools = tk.Menu(bar, tearoff=0)
-        tools.add_command(label="Install / repoint Explorer right-click menu",
+        tools.add_command(label=f"Install / repoint {svshell.MENU_NAME}",
                           command=self.shell_register)
-        tools.add_command(label="Remove Explorer right-click menu", command=self.shell_unregister)
-        tools.add_command(label="Explorer menu status...", command=self.shell_status)
+        tools.add_command(label=f"Remove {svshell.MENU_NAME}", command=self.shell_unregister)
+        tools.add_command(label=f"{svshell.MENU_NAME.capitalize()} status...",
+                          command=self.shell_status)
         tools.add_separator()
         tools.add_command(label="Verify integrity", command=self.verify)
         tools.add_command(label="Vault info...", command=self.vault_info)
@@ -386,6 +397,9 @@ class App(tk.Tk):
         tools.add_command(label="Passwords (manager)...", command=self.open_passwords)
         tools.add_command(label="Set up browser autofill...", command=self.setup_autofill)
         tools.add_command(label="Import passwords from browser...", command=self.import_passwords)
+        tools.add_separator()
+        tools.add_command(label="Preferences (background && auto-lock)...",
+                          command=lambda: PreferencesDialog(self))
         bar.add_cascade(label="Tools", menu=tools)
 
         view = tk.Menu(bar, tearoff=0)
@@ -393,11 +407,21 @@ class App(tk.Tk):
                          command=self.cycle_theme)
         bar.add_cascade(label="View", menu=view)
 
+        helpm = tk.Menu(bar, tearoff=0)
+        helpm.add_command(label="SecureVault Help", accelerator="F1",
+                          command=self.show_help)
+        helpm.add_command(label="Browser pairing & extension setup...",
+                          command=lambda: self.show_help("pairing"))
+        helpm.add_command(label="Install the extension (Chrome/Edge)...",
+                          command=lambda: self.show_help("install the extension"))
+        bar.add_cascade(label="Help", menu=helpm)
+        self.bind("<F1>", lambda _e: self.show_help())
+
         # The menuBAR strip is drawn by the window manager and ignores colours;
         # the drop-downs do not, and aura.track keeps them on the palette
         # through a theme flip. (This is why the Aura scaffold hides the native
         # bar entirely - here the menus predate the retrofit and stay.)
-        for m in (bar, filem, tools, view, self._recent_menu):
+        for m in (bar, filem, tools, view, helpm, self._recent_menu):
             try:
                 svtheme.aura.track(m, "menu")
             except Exception:
@@ -916,6 +940,14 @@ class App(tk.Tk):
         except Exception as ex:
             messagebox.showerror("SecureVault", f"Could not open the password manager:\n{ex}")
 
+    # ---------- help
+    def show_help(self, topic=None):
+        try:
+            import svhelp
+            svhelp.show(self, topic=topic)
+        except Exception as ex:
+            messagebox.showerror("SecureVault", f"Could not open help:\n{ex}")
+
     # ---------- browser autofill wizards
     def setup_autofill(self):
         try:
@@ -1016,25 +1048,29 @@ class App(tk.Tk):
         try:
             exe = svshell.register()
         except Exception as ex:
-            messagebox.showerror("SecureVault", f"Could not install the Explorer menu:\n{ex}")
+            messagebox.showerror("SecureVault",
+                f"Could not install the {svshell.MENU_NAME}:\n{ex}")
             return
+        where = ("  Right-click a file    -> Send to SV (Secure Vault)\n"
+                 "  Right-click a folder  -> Send folder to SV\n"
+                 "  Right-click a backdrop-> Open Secure Vault\n"
+                 if os.name == "nt" else
+                 "  Right-click files/folders in Dolphin -> Send to SV (Secure Vault)\n"
+                 "  (KDE file manager; other desktops: use Add Files in this window)\n")
         messagebox.showinfo("SecureVault",
-            "Explorer right-click menu installed for your user account.\n\n"
-            "  Right-click a file    -> Send to SV (Secure Vault)\n"
-            "  Right-click a folder  -> Send folder to SV\n"
-            "  Right-click a backdrop-> Open Secure Vault\n\n"
-            f"Pointing at:\n{exe}")
-        self.status.set("Explorer menu installed")
+            f"{svshell.MENU_NAME.capitalize()} installed for your user account.\n\n"
+            + where + f"\nPointing at:\n{exe}")
+        self.status.set(f"{svshell.MENU_NAME} installed")
 
     def shell_unregister(self):
         try:
             svshell.unregister()
         except Exception as ex:
             messagebox.showerror("SecureVault", str(ex)); return
-        messagebox.showinfo("SecureVault", "Explorer right-click menu removed.")
+        messagebox.showinfo("SecureVault", f"{svshell.MENU_NAME.capitalize()} removed.")
 
     def shell_status(self):
-        messagebox.showinfo("SecureVault - Explorer menu", svshell.status_text())
+        messagebox.showinfo(f"SecureVault - {svshell.MENU_NAME}", svshell.status_text())
 
     def _shell_hint(self):
         """Mention a missing or stale menu once in the status bar. No dialog -
@@ -1045,11 +1081,108 @@ class App(tk.Tk):
         except Exception:
             return
         if not installed:
-            self.status.set("Tip: Tools > Install Explorer right-click menu "
+            self.status.set(f"Tip: Tools > Install {svshell.MENU_NAME} "
                             "to get 'Send to SV' back.")
         elif not current:
-            self.status.set("Tip: the Explorer menu points at a different copy of "
-                            "SecureVault - Tools > Install / repoint to fix it.")
+            self.status.set(f"Tip: the {svshell.MENU_NAME} points at a different copy "
+                            "of SecureVault - Tools > Install / repoint to fix it.")
+
+    # ---------- background (tray) mode
+    def note_activity(self):
+        """Thread-safe: autofill worker threads call this on every authorized
+        request so background use keeps the idle auto-lock at bay."""
+        self._last_activity = time.time()
+
+    def _tray_events(self):
+        """Drain tray-menu intents (they arrive on pystray's thread via a
+        queue) onto the Tk thread. Runs for the App's whole life."""
+        try:
+            while self.tray is not None:
+                evt = self.tray.events.get_nowait()
+                if evt == "show":
+                    self._show_from_tray()
+                elif evt == "lock":
+                    self._lock_from_tray()
+                elif evt == "quit":
+                    self._quit_from_tray()
+        except Exception:
+            pass                            # queue.Empty and teardown races
+        try:
+            self.after(250, self._tray_events)
+        except Exception:
+            pass
+
+    def _tray_state(self):
+        if self.tray is None:
+            return
+        try:
+            n = len(self._autofill.paired_clients()) if self._autofill else 0
+        except Exception:
+            n = 0
+        self.tray.set_state(True, n)
+
+    def _to_tray(self):
+        """Withdraw the window and keep serving autofill from the tray."""
+        if self.tray is None or not self.tray.start():
+            return False
+        self._trayed = True
+        self._tray_since = time.time()
+        self._last_activity = time.time()
+        self._tray_state()
+        self.withdraw()
+        self.after(30_000, self._autolock_tick)
+        return True
+
+    def _show_from_tray(self):
+        self._trayed = False
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        except Exception:
+            pass
+
+    def _autolock_tick(self):
+        """Background auto-lock: a trayed vault must never stay unlocked
+        indefinitely. Idle = no autofill activity since the window was hidden.
+        Only enforced while trayed; a visible window is the user's business."""
+        if not self._trayed:
+            return
+        import svconfig
+        limit = svconfig.autolock_minutes() * 60
+        idle_since = max(self._tray_since, self._last_activity)
+        if time.time() - idle_since >= limit:
+            self._lock_from_tray()
+            return
+        self.after(30_000, self._autolock_tick)
+
+    def _lock_from_tray(self):
+        """Lock while keeping the process (and tray icon) alive: stop the
+        autofill server (socket/pipe + token gone), wipe scratch plaintext,
+        drop the key material, and let main() park in the locked-tray loop."""
+        self._locked_to_tray = True
+        self._teardown_session()
+        self.destroy()
+
+    def _quit_from_tray(self):
+        """Tray Quit = lock + exit, exactly the fail-closed close path."""
+        self._locked_to_tray = False
+        self._teardown_session()
+        if self.tray is not None:
+            self.tray.stop()
+        self.destroy()
+
+    def _teardown_session(self):
+        if getattr(self, "_autofill", None):
+            self._autofill.stop()          # tear down the pipe/socket + token
+            self._autofill = None
+        self.ws.wipe_all()
+        try:
+            self.vault.dek = None          # drop the data key reference
+        except Exception:
+            pass
+        if self.tray is not None:
+            self.tray.set_state(False)
 
     # ---------- shutdown
     def _on_close(self):
@@ -1064,9 +1197,116 @@ class App(tk.Tk):
             msg += "\n\nClosing now wipes every decrypted copy. Close anyway?"
             if not messagebox.askokcancel("SecureVault", msg):
                 return
+        # Vault is open: closing can either lock+exit, or keep running in the
+        # background so browser autofill stays available. Honour the saved
+        # choice; ask (once, with a remember box) when there is none.
+        import svconfig
+        choice = svconfig.on_close()
+        can_tray = self.tray is not None and self.tray.available()
+        if choice == "ask" and can_tray:
+            dlg = _CloseChoiceDialog(self)
+            self.wait_window(dlg)
+            if dlg.result is None:
+                return                      # cancelled - stay open
+            choice = dlg.result
+            if dlg.remember.get():
+                svconfig.set_on_close(choice)
+        if choice == "tray" and can_tray and self._to_tray():
+            return
         if getattr(self, "_autofill", None):
             self._autofill.stop()          # tear down the pipe -> autofill stops
         self.ws.wipe_all()
+        if self.tray is not None:
+            self.tray.stop()
+        self.destroy()
+
+
+class _CloseChoiceDialog(tk.Toplevel):
+    """Close with an unlocked vault: lock+exit, or keep serving from the tray.
+    .result = "tray" | "exit" | None (cancel); .remember persists the choice."""
+
+    def __init__(self, master):
+        super().__init__(master)
+        svtheme.ensure(self)
+        self.title("SecureVault - close or keep running?")
+        self.configure(bg=TH.bg)
+        self.resizable(False, False)
+        self.grab_set()
+        self.result = None
+        self.remember = tk.BooleanVar(value=False)
+        ttk.Label(self, padding=(16, 14, 16, 4), justify="left", wraplength=420,
+                  text="Keep SecureVault running in the background?").pack(anchor="w")
+        ttk.Label(self, padding=(16, 0, 16, 10), justify="left", wraplength=420,
+                  style="Muted.TLabel",
+                  text="Running in the background keeps browser autofill "
+                       "available while the window is closed (a tray icon "
+                       "shows the state; it auto-locks after being idle). "
+                       "Closing locks the vault and stops autofill.").pack(anchor="w")
+        ttk.Checkbutton(self, text="Remember my choice (change it later in "
+                                   "Tools > Preferences)",
+                        variable=self.remember).pack(anchor="w", padx=16)
+        bar = ttk.Frame(self, padding=(16, 10, 16, 14)); bar.pack(fill="x")
+        ttk.Button(bar, text="Run in background", style="Accent.TButton",
+                   command=lambda: self._done("tray")).pack(side="left", padx=(0, 6))
+        ttk.Button(bar, text="Close && lock",
+                   command=lambda: self._done("exit")).pack(side="left", padx=(0, 6))
+        ttk.Button(bar, text="Cancel", command=self._cancel).pack(side="right")
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.bind("<Escape>", lambda _e: self._cancel())
+
+    def _done(self, what):
+        self.result = what
+        self.destroy()
+
+    def _cancel(self):
+        self.result = None
+        self.destroy()
+
+
+class PreferencesDialog(tk.Toplevel):
+    """The two background-mode knobs. Deliberately small - everything else in
+    the app is either a menu action or lives in the vault itself."""
+
+    def __init__(self, master):
+        super().__init__(master)
+        svtheme.ensure(self)
+        import svconfig
+        self.title("SecureVault - Preferences")
+        self.configure(bg=TH.bg)
+        self.resizable(False, False)
+        self.grab_set()
+        ttk.Label(self, padding=(16, 12, 16, 4), font=(UI, 10, "bold"),
+                  text="When I close the window with a vault open:").pack(anchor="w")
+        self.close_var = tk.StringVar(value=svconfig.on_close())
+        for val, label in (("ask", "Ask me each time"),
+                           ("tray", "Keep running in the background (tray) - "
+                                    "autofill stays available"),
+                           ("exit", "Lock and exit")):
+            ttk.Radiobutton(self, text=label, value=val,
+                            variable=self.close_var).pack(anchor="w", padx=24)
+        ttk.Label(self, padding=(16, 12, 16, 4), font=(UI, 10, "bold"),
+                  text="Background auto-lock:").pack(anchor="w")
+        row = ttk.Frame(self, padding=(24, 0, 16, 0)); row.pack(anchor="w")
+        ttk.Label(row, text="Lock the trayed vault after").pack(side="left")
+        self.mins = tk.IntVar(value=svconfig.autolock_minutes())
+        ttk.Spinbox(row, from_=svconfig.AUTOLOCK_MIN, to=svconfig.AUTOLOCK_MAX,
+                    textvariable=self.mins, width=5).pack(side="left", padx=6)
+        ttk.Label(row, text="idle minutes").pack(side="left")
+        ttk.Label(self, padding=(24, 2, 16, 0), style="Muted.TLabel",
+                  wraplength=420, justify="left",
+                  text="Autofill requests count as activity. There is no "
+                       "'never': a background vault must not stay unlocked "
+                       "indefinitely.").pack(anchor="w")
+        bar = ttk.Frame(self, padding=(16, 12, 16, 14)); bar.pack(fill="x")
+        ttk.Button(bar, text="Save", style="Accent.TButton",
+                   command=self._save).pack(side="left")
+        ttk.Button(bar, text="Cancel", command=self.destroy).pack(side="right")
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+    def _save(self):
+        import svconfig
+        svconfig.set_on_close(self.close_var.get())
+        svconfig.set_autolock_minutes(self.mins.get())
         self.destroy()
 
 
@@ -1174,6 +1414,14 @@ def _unlock_vault_at(master, path):
 
 
 def main():
+    # presence marker (pid only, nothing secret): lets the browser extension
+    # distinguish "SecureVault isn't running" from "running but locked"
+    try:
+        import atexit, svipc
+        svipc.presence_write()
+        atexit.register(svipc.presence_clear)
+    except Exception:
+        pass
     root = tk.Tk(); root.withdraw()
     # Aura before the FIRST window of the session. Everything from here on -
     # the keylogger warning, the vault chooser, the unlock prompts and the PIN
@@ -1209,10 +1457,55 @@ def main():
 
     # Run; if the user switches vaults from the File menu, App sets _next_vault
     # and closes, and we reopen a clean window on the new (already-unlocked) one.
+    # A lock from the tray parks the process in _locked_tray_loop (icon stays,
+    # keys gone) until the user unlocks again or quits.
+    import svtray
+    tray = svtray.Tray()
     while vault is not None:
-        app = App(vault)
+        app = App(vault, tray=tray)
         app.mainloop()
-        vault = getattr(app, "_next_vault", None)
+        nxt = getattr(app, "_next_vault", None)
+        if nxt is not None:
+            vault = nxt
+            continue
+        if getattr(app, "_locked_to_tray", False):
+            vault = _locked_tray_loop(tray, app.vault.path)
+            continue
+        break
+    tray.stop()
+
+
+def _locked_tray_loop(tray, dat_path):
+    """The process while LOCKED in the tray: no keys, no autofill server, just
+    an icon waiting for 'Open' (-> full three-factor unlock) or 'Quit'.
+    Returns an unlocked Vault to reopen the window on, or None to exit."""
+    tray.set_state(False)
+    root = tk.Tk(); root.withdraw()
+    svtheme.apply(root, svtheme.load_pref())
+    result = {"vault": None}
+
+    def poll():
+        try:
+            while True:
+                evt = tray.events.get_nowait()
+                if evt == "quit":
+                    root.quit(); return
+                if evt == "show":
+                    v = _unlock_vault_at(root, dat_path)
+                    if v is not None:
+                        result["vault"] = v
+                        root.quit(); return
+        except Exception:
+            pass                            # queue.Empty
+        root.after(250, poll)
+
+    poll()
+    root.mainloop()
+    try:
+        root.destroy()
+    except Exception:
+        pass
+    return result["vault"]
 
 
 def _show_secret_window(master, secret, uri):

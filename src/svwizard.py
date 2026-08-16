@@ -50,7 +50,7 @@ def default_root():
 # Per-browser: install-detection paths + the registry locations Install-BrowserFill.ps1
 # uses, plus the pages the user visits by hand. `%VARS%` are expanded at detect time;
 # off Windows they stay literal, so nothing is ever found and `found` is False.
-_BROWSERS = [
+_BROWSERS_WINDOWS = [
     {"key": "chrome", "name": "Google Chrome",
      "exe": [r"%ProgramFiles%\Google\Chrome\Application\chrome.exe",
              r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe",
@@ -94,6 +94,63 @@ _BROWSERS = [
          "Save the .csv to a folder only you can read"]},
 ]
 
+# Linux: Quick Browser (ships the extension PRE-INSTALLED) plus the Chromium
+# family. No registry fields - host manifests are files here, installed
+# system-wide by the deb (/etc/{chromium,opt/chrome,opt/edge}/...) and
+# per-user by this wizard for anything else.
+_BROWSERS_LINUX = [
+    {"key": "quick-browser", "name": "Quick Browser",
+     "exe": ["/usr/bin/quick-browser", "/opt/quick-browser/chrome"],
+     "user_data": "~/.config/chromium",
+     "preinstalled_ext": True,
+     "ext_url": "chrome://extensions",
+     "export_url": "chrome://password-manager/settings",
+     "export_steps": [
+         "Open  chrome://password-manager/settings",
+         "Click  Settings  ->  Export passwords",
+         "Save the .csv to a folder only you can read"]},
+    {"key": "chrome", "name": "Google Chrome",
+     "exe": ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable",
+             "/opt/google/chrome/chrome"],
+     "user_data": "~/.config/google-chrome",
+     "ext_url": "chrome://extensions",
+     "export_url": "chrome://password-manager/settings",
+     "export_steps": [
+         "Open  chrome://password-manager/settings",
+         "Click  Settings  ->  Export passwords",
+         "Save the .csv to a folder only you can read"]},
+    {"key": "edge", "name": "Microsoft Edge",
+     "exe": ["/usr/bin/microsoft-edge", "/usr/bin/microsoft-edge-stable",
+             "/opt/microsoft/msedge/msedge"],
+     "user_data": "~/.config/microsoft-edge",
+     "ext_url": "edge://extensions",
+     "export_url": "edge://wallet/passwords/settings",
+     "export_steps": [
+         "Open  edge://wallet/passwords/settings",
+         "Click  Export passwords",
+         "Save the .csv to a folder only you can read"]},
+    {"key": "chromium", "name": "Chromium",
+     "exe": ["/usr/bin/chromium", "/usr/bin/chromium-browser"],
+     "user_data": "~/.config/chromium",
+     "ext_url": "chrome://extensions",
+     "export_url": "chrome://password-manager/settings",
+     "export_steps": [
+         "Open  chrome://password-manager/settings",
+         "Click  Settings  ->  Export passwords",
+         "Save the .csv to a folder only you can read"]},
+    {"key": "brave", "name": "Brave",
+     "exe": ["/usr/bin/brave-browser", "/opt/brave.com/brave/brave"],
+     "user_data": "~/.config/BraveSoftware/Brave-Browser",
+     "ext_url": "brave://extensions",
+     "export_url": "brave://settings/passwords",
+     "export_steps": [
+         "Open  brave://settings/passwords",
+         "Click the  ...  next to 'Saved passwords'  ->  Export passwords",
+         "Save the .csv to a folder only you can read"]},
+]
+
+_BROWSERS = _BROWSERS_WINDOWS if IS_WINDOWS else _BROWSERS_LINUX
+
 
 def detect_browsers():
     """Return one record per known Chromium browser, each annotated with whether
@@ -104,11 +161,11 @@ def detect_browsers():
         rec = dict(b)
         exe = None
         for cand in b["exe"]:
-            p = os.path.expandvars(cand)
+            p = os.path.expanduser(os.path.expandvars(cand))
             if "%" not in p and os.path.isfile(p):
                 exe = p
                 break
-        ud = os.path.expandvars(b["user_data"])
+        ud = os.path.expanduser(os.path.expandvars(b["user_data"]))
         ud_ok = "%" not in ud and os.path.isdir(ud)
         rec["exe_path"] = exe
         rec["user_data_path"] = ud if ud_ok else None
@@ -161,10 +218,15 @@ def allowlist_extension(browser, ext_id):
 
 
 def open_folder(path):
-    """Open a folder in Explorer (Windows) - best effort, never raises."""
+    """Open a folder in the platform file manager - best effort, never raises."""
     try:
         if IS_WINDOWS and hasattr(os, "startfile"):
             os.startfile(path)  # noqa: cross-platform guarded
+            return True
+        if not IS_WINDOWS:
+            import subprocess
+            subprocess.Popen(["xdg-open", path],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return True
     except Exception:
         pass
@@ -393,10 +455,11 @@ class _AFIntro(WizardStep):
             "(Passwords -> Browsers...) before it can touch a stored credential."))
         if not IS_WINDOWS:
             self.wiz.para(parent,
-                "NOTE: this machine is not Windows. The wizard will render and "
-                "explain each step, but the browser/registry actions are Windows-"
-                "only and will be reported as skipped.",
-                foreground=TH.warn)
+                "On Quick OS, Quick Browser ships with the SecureVault extension "
+                "PRE-INSTALLED - you usually only need to pair it (Passwords -> "
+                "Browsers...). For Chrome, Edge or another Chromium browser, this "
+                "wizard sets up the native host and shows the one manual "
+                "'Load unpacked' step.")
 
 
 class _AFDetect(WizardStep):
@@ -459,6 +522,42 @@ class _AFInstall(WizardStep):
             return
         self._done = True
         root = self.wiz.state["root_dir"]
+
+        if not IS_WINDOWS:
+            # Linux: the extension identity is pinned at build time; nothing to
+            # generate. System host manifests come from the deb; this wizard
+            # adds the per-user ones so any Chromium browser it missed works.
+            try:
+                import svautofill_setup
+                st = svautofill_setup.linux_status(root)
+                if not st["ext_id"]:
+                    self._append("ERROR: extension/manifest.json has no pinned key "
+                                 "- this checkout cannot derive the extension ID.")
+                    self.wiz.state["apply"] = None
+                    return
+                self._append(f"Extension ID (pinned): {st['ext_id']}")
+                self._append(f"Extension folder:      {st['extdir']}")
+                if st["system_manifests"]:
+                    self._append("System-wide native-host manifests (from the package):")
+                    for d in st["system_manifests"]:
+                        self._append(f"  {d}/{HOST_NAME}.json")
+                res = svautofill_setup.linux_apply_user(root)
+                self._append("Per-user native-host manifests written:")
+                for p in res["written"]:
+                    self._append(f"  {p}")
+                self.wiz.state["apply"] = {
+                    "ext_id": res["ext_id"],
+                    "hostmanifest": (res["written"][0] if res["written"] else ""),
+                }
+                self._append("")
+                self._append("Quick Browser already has the extension pre-installed. "
+                             "For Chrome/Edge, click Next for the one manual "
+                             "'Load unpacked' step.")
+            except Exception as ex:
+                self.wiz.state["apply"] = None
+                self._append(f"ERROR setting up the native host: {ex}")
+            return
+
         # 1. reuse svautofill_setup.apply() - generates the key/ID + writes every
         #    native-host/extension file. Single source of truth for that logic.
         try:
@@ -476,11 +575,6 @@ class _AFInstall(WizardStep):
             return
 
         info = self.wiz.state["apply"]
-        if not IS_WINDOWS:
-            self._append("")
-            self._append("Windows only: skipping browser/registry registration "
-                         "on this platform.")
-            return
 
         # 2. per-browser: register the native host (HKCU) + allowlist (HKLM).
         by_key = {b["key"]: b for b in self.wiz.state["browsers"]}
@@ -526,7 +620,7 @@ class _AFLoad(WizardStep):
         self.wiz.para(parent,
             "Browsers cannot be scripted into loading an unpacked extension, so "
             "this one step is by hand (once):")
-        self.wiz.readonly_text(parent, height=7, content=(
+        steps = (
             "1. Open your browser's extensions page:\n"
             "     Chrome  ->  chrome://extensions\n"
             "     Edge    ->  edge://extensions\n"
@@ -534,7 +628,12 @@ class _AFLoad(WizardStep):
             "   (These pages can't be opened from an app - type/paste the address.)\n"
             "2. Turn ON 'Developer mode' (top-right toggle).\n"
             "3. Click 'Load unpacked' and choose the folder below.\n"
-            "4. The SecureVault Autofill extension appears in the list."))
+            "4. The SecureVault Autofill extension appears in the list.")
+        if not IS_WINDOWS:
+            steps = ("QUICK BROWSER: nothing to do - the extension is "
+                     "pre-installed. Skip to the next step.\n\n"
+                     "CHROME / EDGE / OTHER CHROMIUM BROWSERS:\n" + steps)
+        self.wiz.readonly_text(parent, height=9, content=steps)
         self.wiz.para(parent, "Extension folder to select:")
         row = ttk.Frame(parent)
         row.pack(fill="x", pady=(0, 6))
@@ -597,7 +696,13 @@ class _AFConfirmId(WizardStep):
         origin = f"chrome-extension://{ext_id}/"
         try:
             import svautofill_setup
-            svautofill_setup.set_allowed_origin(self.wiz.state["root_dir"], origin)
+            if IS_WINDOWS:
+                svautofill_setup.set_allowed_origin(self.wiz.state["root_dir"], origin)
+            else:
+                # /opt is read-only here; the per-user host manifests are the
+                # writable copies, so repoint those.
+                svautofill_setup.linux_apply_user(self.wiz.state["root_dir"],
+                                                  ext_id=ext_id)
         except Exception as ex:
             messagebox.showerror("SecureVault", f"Could not update files:\n{ex}",
                                  parent=self.wiz)
@@ -650,9 +755,13 @@ class _AFDone(WizardStep):
             "     the shown PIN in the browser's SecureVault popup.",
             "  3. Visit a login page - matching logins are offered inline.",
             "",
-            "TO REMOVE LATER:",
+            "TO REMOVE LATER:"] + ([
             "  • Run  uninstall.ps1,  or  Install-BrowserFill.ps1 -Revert",
             "  • Remove the unpacked extension from the browser's extensions page."]
+            if IS_WINDOWS else [
+            "  • Revoke the browser in Passwords -> Browsers... (stops access at once)",
+            "  • Remove the extension from the browser's extensions page",
+            "  • Delete ~/.config/<browser>/NativeMessagingHosts/" + HOST_NAME + ".json"])
         self.wiz.readonly_text(parent, "\n".join(lines), height=15)
         # optional bridge into the password-import wizard
         app = self.wiz.state.get("app")
