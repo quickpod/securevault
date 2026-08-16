@@ -76,7 +76,11 @@ MAX_LABEL_LEN     = 64
 # two steps of proving who you are. Everything that can read or write a
 # credential is privileged.
 OPEN_OPS       = frozenset({"ping", "register", "challenge"})
-PRIVILEGED_OPS = frozenset({"query", "identities", "save", "update", "generate"})
+PRIVILEGED_OPS = frozenset({"query", "identities", "save", "update", "generate",
+                            # favorites sync: bookmark snapshots are vault
+                            # data - reading OR writing them takes the same
+                            # signed, challenge-bound proof as a password
+                            "bookmarks_save", "bookmarks_get", "bookmarks_status"})
 ALL_OPS        = OPEN_OPS | PRIVILEGED_OPS
 
 

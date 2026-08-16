@@ -41,40 +41,36 @@ DOT_UNLOCKED = "#31b558"
 DOT_LOCKED   = "#9aa0a6"
 
 
-def _asset(name):
-    here = os.path.dirname(os.path.abspath(__file__))
-    roots = [here, os.path.dirname(here)]
-    if getattr(sys, "_MEIPASS", None):
-        roots.insert(0, sys._MEIPASS)
-    if getattr(sys, "frozen", False):
-        roots.append(os.path.dirname(sys.executable))
-    for r in roots:
-        p = os.path.join(r, name)
-        if os.path.exists(p):
-            return p
-    return None
-
-
 def _icon_image(unlocked):
-    """The app mark with a state dot. Falls back to a drawn padlock disc if
-    the png is missing (never let the tray fail over a cosmetic asset)."""
-    size = 64
-    img = None
-    png = _asset("securevault.png")
-    if png:
-        try:
-            img = Image.open(png).convert("RGBA").resize((size, size))
-        except Exception:
-            img = None
-    if img is None:
-        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        d.ellipse((6, 6, 58, 58), outline="#6a7cff", width=6)
-        d.rectangle((24, 30, 40, 46), fill="#6a7cff")
+    """The state icon: an OPEN padlock in the Aura accent while unlocked, a
+    CLOSED grey padlock while locked. Shape is the primary channel (open vs
+    closed shackle), colour the secondary - both survive 16-22px on the light
+    and the dark Plasma panel (owner requirement: the two states must be
+    unmistakable at tray size). Drawn here rather than shipped as files so a
+    missing asset can never blank the tray."""
+    S = 64
+    ACCENT = (79, 107, 255, 255)      # unlocked body - Aura accent
+    GREY = (138, 144, 160, 255)      # locked body - neutral
+    WHITE = (255, 255, 255, 255)
+    W = 7                             # shackle stroke
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    colour = DOT_UNLOCKED if unlocked else DOT_LOCKED
-    d.ellipse((size - 26, size - 26, size - 4, size - 4), fill=colour,
-              outline="#ffffff", width=2)
+    col = ACCENT if unlocked else GREY
+    if unlocked:
+        # open: shackle swung up-right, left leg free of the body
+        d.arc((26, 0, 58, 32), start=180, end=340, fill=col, width=W)
+        d.line((58 - W // 2 + 1, 14, 58 - W // 2 + 1, 24), fill=col, width=W)
+        d.rounded_rectangle((6, 28, 46, 58), radius=8, fill=col)
+        d.ellipse((22, 36, 30, 44), fill=WHITE)
+        d.rectangle((24, 41, 28, 51), fill=WHITE)
+    else:
+        # closed: shackle centred, both legs into the body
+        d.arc((16, 4, 48, 36), start=180, end=360, fill=col, width=W)
+        d.line((16 + W // 2 - 3, 20, 16 + W // 2 - 3, 30), fill=col, width=W)
+        d.line((48 - W // 2 + 2, 20, 48 - W // 2 + 2, 30), fill=col, width=W)
+        d.rounded_rectangle((12, 28, 52, 58), radius=8, fill=col)
+        d.ellipse((28, 36, 36, 44), fill=WHITE)
+        d.rectangle((30, 41, 34, 51), fill=WHITE)
     return img
 
 

@@ -276,6 +276,32 @@ class PasswordStore:
         with 'not paired' and it has to be paired again by hand."""
         return self.clients().pop(client_id, None) is not None
 
+    # ---- browser bookmarks backup (favorites sync via the paired extension)
+    # One snapshot, stored INSIDE the encrypted blob like everything else:
+    # captured from the paired browser while unlocked, restorable into a fresh
+    # browser after a reinstall. Same setdefault pattern as "clients" - no
+    # STORE_VERSION bump, a missing key just means "never backed up".
+    def bookmarks(self):
+        """{"roots": [...], "count": n, "saved_at": epoch, "label": "..."} or
+        None when no backup exists."""
+        if self.data is None:
+            self.load()
+        return self.data.get("bookmarks")
+
+    def set_bookmarks(self, roots, count, label=""):
+        if self.data is None:
+            self.load()
+        self.data["bookmarks"] = {
+            "roots": roots, "count": int(count),
+            "saved_at": int(time.time()),
+            "label": str(label or "")[:64],
+        }
+
+    def clear_bookmarks(self):
+        if self.data is None:
+            self.load()
+        return self.data.pop("bookmarks", None) is not None
+
     # ---- crud
     def add(self, title, username="", password="", url="", notes="",
             totp_secret="", tags=None):

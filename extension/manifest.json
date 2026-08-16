@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SecureVault Autofill",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Fill, suggest, save and update passwords from your local SecureVault. No cloud - talks only to the SecureVault app on this machine.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -9,7 +9,9 @@
     "activeTab",
     "scripting",
     "storage",
-    "clipboardWrite"
+    "clipboardWrite",
+    "bookmarks",
+    "alarms"
   ],
   "host_permissions": [
     "http://*/*",

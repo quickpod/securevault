@@ -193,6 +193,23 @@ typed.
   if it's locked, it says to unlock it in the app.
 * Sites with exactly ONE saved login fill automatically on load.
 
+## Bookmarks backup & restore (favorites sync)
+
+While a browser is paired and the vault is unlocked, SecureVault keeps a
+backup of that browser's bookmarks INSIDE the encrypted vault - captured on
+pairing and whenever bookmarks change, never cached anywhere else.
+
+* After a reinstall (or on a new machine), pair the fresh browser: if it has
+  no bookmarks and the vault holds a backup, the popup offers to RESTORE
+  them. Merge adds what's missing (no duplicates - matched by URL within its
+  folder); "Replace all" clears the browser's bookmarks first. Nothing is
+  ever restored silently.
+* An empty browser can never overwrite a real backup - the vault refuses.
+* The popup's Bookmarks line shows vault count, last backup time and the
+  browser's own count, with "Back up bookmarks" and "Restore..." buttons.
+* The Browsers window in the app shows the stored backup ("Browser data")
+  and can delete it.
+
 ## Unpairing / revoking
 
 Passwords -> Browsers... -> Revoke. The browser loses access immediately and
@@ -256,12 +273,31 @@ choice any time in Tools > Preferences.
 
 ## The tray icon
 
-* A green dot means unlocked (autofill available); grey means locked.
-* Click (or "Open SecureVault") brings the window back.
+* An OPEN blue padlock = unlocked (autofill available). A CLOSED grey
+  padlock = locked. The switch is instant, including on auto-lock.
+* Plasma may place a new tray icon behind the little expand arrow (^) at the
+  right end of the panel - click it if you don't see the padlock. You can pin
+  it: right-click the arrow > Configure System Tray > Entries > SecureVault >
+  "Always shown".
+* Click the padlock (or "Open SecureVault") to bring the window back.
 * "Lock now" locks immediately: the autofill endpoint disappears, the
   transport token is destroyed, decrypted scratch copies are wiped. The icon
-  stays, showing locked; opening again asks for all three factors.
+  turns to the closed padlock; opening again asks for all three factors.
 * "Quit (lock and exit)" does the same and then exits completely.
+
+## Can't find the icon? Just launch the app again
+
+SecureVault is single-instance: starting it from the menu or desktop while a
+copy is already running (visible, in the tray, or locked in the tray) simply
+RAISES the running one - never an error, never a second copy. That is the
+guaranteed way back to a background vault.
+
+## Start at login (locked)
+
+Once a vault has been opened on this machine, SecureVault starts at login -
+LOCKED, as a tray icon only. No window opens and nothing prompts you; unlock
+whenever you need it, and autofill is one unlock away instead of "find and
+launch the app first". Turn this off (or back on) in Tools > Preferences.
 
 ## Auto-lock
 
@@ -272,8 +308,8 @@ deliberately no "never".
 
 ## Nothing secret in the tray
 
-The tooltip and menu show only "unlocked/locked" and a paired-browser count -
-never a vault path, an entry name or any credential.
+The tooltip and menu show only the state word (and a paired-browser count
+while unlocked) - never a vault path, an entry name or any credential.
 """, []))
 
     t.append(("Security model, plainly", """\

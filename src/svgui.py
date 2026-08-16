@@ -201,8 +201,13 @@ class App(tk.Tk):
         self._statcache = {}
         self._next_vault = None            # set by switch_vault; read by main()
         self._set_title()
-        self.geometry("1040x620")
-        self.minsize(760, 420)
+        # Fit the DEFAULT geometry to the screen (owner's laptop is 1366x768;
+        # HiDPI scaling shrinks the usable logical area further) and keep the
+        # minimum low: with the wrapping toolbars below, every primary action
+        # stays reachable even at the minimum.
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        self.geometry(f"{min(1040, sw - 40)}x{min(620, sh - 100)}")
+        self.minsize(560, 400)
         self._set_window_icon()
         self._build()
         self._set_title()          # again: the header label only exists now
@@ -232,6 +237,13 @@ class App(tk.Tk):
             self.after(300, self._tray_events)
             if self.tray._started:
                 self._tray_state()         # process was already trayed once
+        # first successful open on this machine turns login-autostart on by
+        # default (explicit off in Preferences is never overridden)
+        try:
+            import svautostart
+            svautostart.ensure_default()
+        except Exception:
+            pass
 
     def _set_title(self):
         self.title(f"SecureVault — {os.path.basename(self.vault.path)} "
@@ -301,15 +313,24 @@ class App(tk.Tk):
         self._theme_btn.pack(side="right")
         svtheme.beam(self).pack(fill="x")
 
+        # Buttons pack FIRST (from the right), the search entry last with the
+        # leftover: pack clips whatever was packed LAST when width runs out,
+        # so this order means a narrow window shrinks the search box instead
+        # of hiding actions (field defect: "Passwords" vanished at restored
+        # size on a 1366x768 laptop).
         top = ttk.Frame(self, padding=(8, 10, 8, 4)); top.pack(fill="x")
         ttk.Label(top, text="Search:").pack(side="left")
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *_: self.refresh())
-        e = ttk.Entry(top, textvariable=self.search_var); e.pack(side="left", fill="x", expand=True, padx=6)
+        for txt, cmd, style in (("Browsers", self.open_browsers, None),
+                                ("Passwords", self.open_passwords, None),
+                                ("Add Folder", self.add_folder, None),
+                                ("Add Files", self.add_files, "Accent.TButton")):
+            kw = {"style": style} if style else {}
+            ttk.Button(top, text=txt, command=cmd, **kw).pack(side="right", padx=2)
+        e = ttk.Entry(top, textvariable=self.search_var, width=12)
+        e.pack(side="left", fill="x", expand=True, padx=6)
         e.focus_set()
-        ttk.Button(top, text="Add Files", command=self.add_files, style="Accent.TButton").pack(side="left", padx=2)
-        ttk.Button(top, text="Add Folder", command=self.add_folder).pack(side="left", padx=2)
-        ttk.Button(top, text="Passwords", command=self.open_passwords).pack(side="left", padx=2)
 
         self.pan = ttk.PanedWindow(self, orient="horizontal")
         self.pan.pack(fill="both", expand=True, padx=8)
@@ -317,7 +338,13 @@ class App(tk.Tk):
         # --- left: folder tree
         left = ttk.Frame(self.pan)
         ttk.Label(left, text="Folders", anchor="w", padding=(2, 0, 0, 3)).pack(fill="x")
-        self.folders = ttk.Treeview(left, show="tree", selectmode="browse")
+        # height=5: a Treeview's DEFAULT minimum is 10 rows, and pack clips
+        # the LAST-packed widgets when height runs out - which was the bottom
+        # action bar at small window heights (same clipping class as the
+        # horizontal field defect, vertically). 5 rows keeps every bar visible
+        # at the 400px minimum; the tree still expands to fill real estate.
+        self.folders = ttk.Treeview(left, show="tree", selectmode="browse",
+                                    height=5)
         lvs = ttk.Scrollbar(left, orient="vertical", command=self.folders.yview)
         self.folders.configure(yscrollcommand=lvs.set)
         lvs.pack(side="right", fill="y")
@@ -335,7 +362,8 @@ class App(tk.Tk):
             .pack(side="left", fill="x", expand=True, padx=6)
 
         cols = ("name", "size", "type", "modified", "source")
-        self.tree = ttk.Treeview(right, columns=cols, show="headings", selectmode="extended")
+        self.tree = ttk.Treeview(right, columns=cols, show="headings",
+                                 selectmode="extended", height=5)
         for c, w in (("name", 300), ("size", 95), ("type", 115), ("modified", 165), ("source", 170)):
             self.tree.heading(c, text=c.title(), command=lambda cc=c: self.sort_by(cc))
             self.tree.column(c, width=w, anchor="w", stretch=(c == "name"))
@@ -357,12 +385,15 @@ class App(tk.Tk):
         ttk.Button(self.openbar, text="I'm done - close & wipe",
                    command=self.finish_open).pack(side="right", padx=3)
 
-        self.bottombar = ttk.Frame(self, padding=8); self.bottombar.pack(fill="x")
+        # A wrapping bar: seven buttons never fit one row on a small screen,
+        # and clipped buttons are buttons that do not exist (field defect).
+        self.bottombar = svtheme.FlowBar(self, hpad=3, vpad=3)
+        self.bottombar.pack(fill="x", padx=8, pady=(4, 4))
         for txt, cmd in (("Open", self.open_external), ("Preview", self.preview),
                          ("Extract Selected", self.extract_sel), ("Extract All", self.extract_all),
                          ("Delete", self.delete_sel), ("Verify", self.verify),
                          ("Change Password", self.change_pw)):
-            ttk.Button(self.bottombar, text=txt, command=cmd).pack(side="left", padx=3)
+            self.bottombar.add(ttk.Button(self.bottombar, text=txt, command=cmd))
 
         self.status = tk.StringVar(value="")
         ttk.Label(self, textvariable=self.status, anchor="w",
@@ -940,6 +971,21 @@ class App(tk.Tk):
         except Exception as ex:
             messagebox.showerror("SecureVault", f"Could not open the password manager:\n{ex}")
 
+    def open_browsers(self):
+        """Browser integration, one click from the main window (field ask):
+        the pairing dialog with the paired list, PIN flow and bookmarks
+        backup status."""
+        import svpassgui
+        if not getattr(self, "_autofill", None):
+            messagebox.showerror("SecureVault",
+                                 "The autofill service is not running.")
+            return
+        try:
+            svpassgui.open_pairing(self, self._autofill)
+        except Exception as ex:
+            messagebox.showerror("SecureVault", f"Could not open browser "
+                                                f"integration:\n{ex}")
+
     # ---------- help
     def show_help(self, topic=None):
         try:
@@ -1297,6 +1343,14 @@ class PreferencesDialog(tk.Toplevel):
                   text="Autofill requests count as activity. There is no "
                        "'never': a background vault must not stay unlocked "
                        "indefinitely.").pack(anchor="w")
+        ttk.Label(self, padding=(16, 12, 16, 4), font=(UI, 10, "bold"),
+                  text="Startup:").pack(anchor="w")
+        import svautostart
+        self.autostart = tk.BooleanVar(
+            value=bool(svconfig.autostart_pref()) or svautostart.is_enabled())
+        ttk.Checkbutton(self, text="Start SecureVault at login - locked, in "
+                                   "the tray (autofill is one unlock away)",
+                        variable=self.autostart).pack(anchor="w", padx=24)
         bar = ttk.Frame(self, padding=(16, 12, 16, 14)); bar.pack(fill="x")
         ttk.Button(bar, text="Save", style="Accent.TButton",
                    command=self._save).pack(side="left")
@@ -1304,9 +1358,11 @@ class PreferencesDialog(tk.Toplevel):
         self.bind("<Escape>", lambda _e: self.destroy())
 
     def _save(self):
-        import svconfig
+        import svconfig, svautostart
         svconfig.set_on_close(self.close_var.get())
         svconfig.set_autolock_minutes(self.mins.get())
+        svconfig.set_autostart(self.autostart.get())
+        svautostart.apply_pref(self.autostart.get())
         self.destroy()
 
 
@@ -1413,15 +1469,52 @@ def _unlock_vault_at(master, path):
     return None
 
 
-def main():
+def main(start_locked=False):
+    import atexit, svipc, svtray
+
+    # Single-instance: if SecureVault is already running (window, tray, or
+    # locked-in-tray), poke it awake and leave. Launching from the menu is the
+    # guaranteed way back to a background instance even if the tray is hidden.
+    if svipc.activate_running():
+        return
+
     # presence marker (pid only, nothing secret): lets the browser extension
     # distinguish "SecureVault isn't running" from "running but locked"
     try:
-        import atexit, svipc
         svipc.presence_write()
         atexit.register(svipc.presence_clear)
     except Exception:
         pass
+
+    # tray + activation exist for the whole process life; activation pokes are
+    # routed through the tray event queue, which every state already drains.
+    tray = svtray.Tray()
+    act = svipc.ActivationServer(lambda: tray.events.put("show"))
+    act.start()
+    atexit.register(act.stop)
+
+    # --locked (autostart at login): no window, no prompt - just the locked
+    # tray icon and the activation listener. Never on a machine with no vault.
+    if start_locked:
+        dat = sv.resolve_dat(remember=False)
+        if not os.path.isfile(dat):
+            return
+        tray.start()
+        vault = _locked_tray_loop(tray, dat)
+        while vault is not None:
+            app = App(vault, tray=tray)
+            app.mainloop()
+            nxt = getattr(app, "_next_vault", None)
+            if nxt is not None:
+                vault = nxt
+                continue
+            if getattr(app, "_locked_to_tray", False):
+                vault = _locked_tray_loop(tray, app.vault.path)
+                continue
+            break
+        tray.stop()
+        return
+
     root = tk.Tk(); root.withdraw()
     # Aura before the FIRST window of the session. Everything from here on -
     # the keylogger warning, the vault chooser, the unlock prompts and the PIN
@@ -1459,8 +1552,6 @@ def main():
     # and closes, and we reopen a clean window on the new (already-unlocked) one.
     # A lock from the tray parks the process in _locked_tray_loop (icon stays,
     # keys gone) until the user unlocks again or quits.
-    import svtray
-    tray = svtray.Tray()
     while vault is not None:
         app = App(vault, tray=tray)
         app.mainloop()
@@ -1477,8 +1568,10 @@ def main():
 
 def _locked_tray_loop(tray, dat_path):
     """The process while LOCKED in the tray: no keys, no autofill server, just
-    an icon waiting for 'Open' (-> full three-factor unlock) or 'Quit'.
-    Returns an unlocked Vault to reopen the window on, or None to exit."""
+    an icon waiting for 'Open' (-> full three-factor unlock) or 'Quit' - plus
+    the activation listener, so launching the app again also lands here as a
+    'show'. Returns an unlocked Vault to reopen the window on, or None."""
+    tray.start()                            # idempotent; needed for --locked boots
     tray.set_state(False)
     root = tk.Tk(); root.withdraw()
     svtheme.apply(root, svtheme.load_pref())

@@ -187,6 +187,134 @@ async function signedCall(op, fields) {
     Object.assign({ op, client_id: clientId, nonce: chal.nonce, sig }, fields)));
 }
 
+// ------------------------------------------------------------ bookmarks sync
+// Favorites live IN THE VAULT: while paired + unlocked the extension backs the
+// browser's bookmarks up into the encrypted blob (privileged, signed ops like
+// everything else), and a fresh browser can restore them after pairing. Rules:
+//   * an EMPTY browser never overwrites a real backup (the vault refuses too);
+//   * restore is user-confirmed in the popup, merge (dedupe by URL within its
+//     folder) or replace - never silent;
+//   * change-triggered backups are debounced through chrome.alarms (MV3
+//     worker timers do not survive suspension).
+
+function bmSerialize(node) {
+  const o = { title: node.title || "" };
+  if (node.url) o.url = node.url;
+  if (node.children) o.children = node.children.map(bmSerialize);
+  return o;
+}
+
+async function bmRoots() {
+  const tree = await chrome.bookmarks.getTree();
+  return (tree[0].children || []).map(bmSerialize);   // [bar, other, ...]
+}
+
+function bmCount(nodes) {
+  let n = 0;
+  for (const x of nodes || []) {
+    if (x.url) n++;
+    if (x.children) n += bmCount(x.children);
+  }
+  return n;
+}
+
+async function bmBackup() {
+  const roots = await bmRoots();
+  const count = bmCount(roots);
+  if (!count) return { ok: false, code: "empty", error: "no bookmarks in this browser yet" };
+  return signedCall("bookmarks_save", { origin: "", data: { roots }, count });
+}
+
+async function bmMergeInto(parentId, nodes, mode) {
+  const existing = await chrome.bookmarks.getChildren(parentId);
+  const folders = new Map(existing.filter((e) => !e.url).map((e) => [e.title, e.id]));
+  const urls = new Set(existing.filter((e) => e.url).map((e) => e.url));
+  let made = 0;
+  for (const n of nodes || []) {
+    if (n.url) {
+      if (!urls.has(n.url)) {                      // dedupe: URL within folder
+        await chrome.bookmarks.create({ parentId, title: n.title, url: n.url });
+        urls.add(n.url);
+        made++;
+      }
+    } else {
+      let fid = folders.get(n.title);
+      if (!fid) {
+        const f = await chrome.bookmarks.create({ parentId, title: n.title });
+        fid = f.id;
+        folders.set(n.title, fid);
+      }
+      made += await bmMergeInto(fid, n.children, mode);
+    }
+  }
+  return made;
+}
+
+let bmRestoring = false;
+
+async function bmRestore(mode) {                    // "merge" | "replace"
+  const got = await signedCall("bookmarks_get", { origin: "" });
+  if (!got.ok) return got;
+  const stored = (got.data && got.data.roots) || [];
+  const tree = await chrome.bookmarks.getTree();
+  const liveRoots = tree[0].children || [];
+  bmRestoring = true;
+  let made = 0;
+  try {
+    for (let i = 0; i < stored.length && i < liveRoots.length; i++) {
+      if (mode === "replace") {
+        for (const c of [...(liveRoots[i].children || [])]) {
+          await chrome.bookmarks.removeTree(c.id);
+        }
+      }
+      made += await bmMergeInto(liveRoots[i].id, stored[i].children, mode);
+    }
+  } finally {
+    bmRestoring = false;
+  }
+  return { ok: true, created: made, count: got.count };
+}
+
+async function bmStatus() {
+  const roots = await bmRoots();
+  const local = bmCount(roots);
+  const st = await signedCall("bookmarks_status", { origin: "" });
+  if (!st.ok) return st;
+  return { ok: true, local, vault: st.count || 0, saved_at: st.saved_at || 0,
+           have: !!st.have };
+}
+
+// change-triggered backup, debounced via alarms (survives worker suspension)
+function bmSchedule() {
+  if (bmRestoring) return;
+  chrome.alarms.create("sv-bm-backup", { delayInMinutes: 0.5 });
+}
+chrome.alarms.onAlarm.addListener(async (a) => {
+  if (a.name !== "sv-bm-backup") return;
+  try {
+    if (await getClientId()) await bmBackup();     // vault refuses empty sets
+  } catch (e) { /* vault closed/locked - the next change tries again */ }
+});
+for (const ev of ["onCreated", "onRemoved", "onChanged", "onMoved"]) {
+  try { chrome.bookmarks[ev].addListener(bmSchedule); } catch (e) {}
+}
+
+/** After a successful pairing: offer restore when this browser is empty and
+ *  the vault has a backup; otherwise take a first backup. */
+async function bmPostPair() {
+  try {
+    const st = await bmStatus();
+    if (!st.ok) return null;
+    if (st.have && st.vault > 0 && st.local === 0) {
+      return { offer_restore: st.vault };
+    }
+    if (st.local > 0) await bmBackup();
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
 /** One-time pairing with the PIN shown in the SecureVault app window. */
 async function pair(pin) {
   if (!/^\d{6}$/.test(String(pin || ""))) {
@@ -201,7 +329,11 @@ async function pair(pin) {
   const spki = b64(await crypto.subtle.exportKey("spki", pair_.publicKey));
   const reply = await nativeCall({ op: "register", pin: String(pin),
                                    pubkey: spki, label: browserLabel() });
-  if (reply.ok && reply.client_id) await setClientId(reply.client_id);
+  if (reply.ok && reply.client_id) {
+    await setClientId(reply.client_id);
+    const bm = await bmPostPair();          // backup, or offer restore
+    if (bm && bm.offer_restore) reply.offer_restore = bm.offer_restore;
+  }
   return reply;
 }
 
@@ -277,6 +409,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (op === "popup-fill") { popupFill().then(sendResponse); return true; }
   if (op === "popup-generate") {
     popupGenerate(msg.length).then(sendResponse); return true;
+  }
+  if (op === "bm-status") { bmStatus().then(sendResponse).catch(() => sendResponse({ ok: false })); return true; }
+  if (op === "bm-backup") { bmBackup().then(sendResponse).catch((e) => sendResponse({ ok: false, error: String(e) })); return true; }
+  if (op === "bm-restore") {
+    bmRestore(msg.mode === "replace" ? "replace" : "merge")
+      .then(sendResponse).catch((e) => sendResponse({ ok: false, error: String(e) }));
+    return true;
   }
 
   if (!PRIVILEGED.includes(op)) {

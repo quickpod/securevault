@@ -80,7 +80,8 @@ def _caller_origin():
 
 # ops the extension may relay; anything else is refused here, before the pipe
 _RELAY_OPS = {"ping", "register", "challenge",
-              "query", "save", "update", "generate", "identities"}
+              "query", "save", "update", "generate", "identities",
+              "bookmarks_save", "bookmarks_get", "bookmarks_status"}
 
 # ops the host answers ITSELF, never relayed. open_app launches the vault app
 # when it is not running (the popup's "Open SecureVault" button); it carries
@@ -128,6 +129,8 @@ def _open_app():
 # decides the shape of what reaches the handler, so a malformed or padded
 # message from the browser cannot smuggle extra keys into the request dict.
 _RELAY_FIELDS = ("op", "origin", "username", "password", "url", "length",
+                 # favorites sync payload (bookmark tree + count)
+                 "data", "count",
                  # pairing + per-request authentication (svauth)
                  "pin", "pubkey", "label", "client_id", "nonce", "sig")
 

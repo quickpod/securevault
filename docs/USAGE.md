@@ -343,6 +343,16 @@ Autofill then offers matching logins on login pages, suggests known usernames/em
 signups, can generate strong passwords, and prompts to save/update - all confirmed in the
 app. **It only works while SecureVault is open and unlocked** (window or background mode).
 
+**Bookmarks backup & restore (favorites sync).** A paired browser's bookmarks are backed
+up into the **encrypted vault** - on pairing and whenever they change (debounced), via the
+same signed, challenge-bound ops as passwords. Pair a fresh/reinstalled browser and, if it
+is empty while the vault holds a backup, the popup offers to **restore** (user-confirmed:
+*Merge* dedupes by URL within its folder; *Replace all* clears the browser first - nothing
+is silent). An empty browser can never overwrite a real backup. Status lives in the popup
+("Bookmarks: N in vault ... M in this browser") and in the app's Browsers window
+("Browser data", with a delete-backup control). Works identically for the bundled Quick
+Browser extension and manual Chrome/Edge installs, Windows and Linux.
+
 Day-to-day, in the browser:
 
 - The dropdown is keyboard-first (arrows / Enter / Escape), follows the page's light/dark
@@ -362,11 +372,23 @@ Closing the window with an open vault asks: **Run in background** or **Close & l
 (with a *remember my choice* box; change it later in **Tools -> Preferences**). Background
 mode is what keeps browser autofill available while no window is on screen:
 
-- A tray icon shows the state - green dot = unlocked (autofill available), grey = locked.
-  Windows notification area; on Linux/Quick OS a Plasma StatusNotifier.
+- The tray icon IS the state: an **open blue padlock** = unlocked (autofill available), a
+  **closed grey padlock** = locked; it switches instantly, including on auto-lock. Windows
+  notification area; on Linux/Quick OS a Plasma StatusNotifier. Plasma may put a new icon
+  behind the panel's expand arrow (^) - pin it via Configure System Tray > Entries if you
+  want it always visible.
 - **Open SecureVault** brings the window back. **Lock now** locks immediately: the autofill
   endpoint disappears, the transport token is destroyed, and decrypted scratch copies are
   wiped - identical to closing the window. **Quit** locks and exits.
+- **Single-instance:** launching SecureVault while a copy is already running (visible,
+  trayed, or locked in the tray) raises the running one - never an error, never a second
+  instance. The guaranteed way back to a background vault even if the tray is hidden.
+- **Start at login:** once a vault has been opened on a machine, SecureVault starts at
+  login **locked, in the tray** - no window, no prompt; autofill is one unlock away. An
+  explicit preference (Tools > Preferences) turns it off; it is never enabled on a machine
+  where no vault has ever been opened. Linux: `~/.config/autostart/` entry (stops firing
+  automatically if the package is removed); Windows: per-user HKCU Run value (removed by
+  `uninstall.ps1`).
 - **Auto-lock:** a trayed vault locks itself after an idle period (default 15 minutes;
   autofill requests count as activity; configurable 1-240 minutes, never "off").
 - The tooltip/menu never show paths, entry names or secrets.

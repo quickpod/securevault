@@ -139,14 +139,32 @@
       `<circle cx="12" cy="15" r="1.6" fill="${colour}"/></svg>`;
   }
 
-  // ---- floating menu (shadow-DOM host; keyboard-first)
+  // ---- floating menu (shadow-DOM host; keyboard-first; SPA-proof)
+  //
+  // Field defect (owner's laptop, quickopen.ai login - a React app): the menu
+  // appeared for a second and vanished. Three causes, three rules:
+  //   1. NEVER close on scroll - REPOSITION. Frameworks and autofocus scripts
+  //      fire capture-phase scroll events on render; closing there kills the
+  //      menu the instant it opens. Close only when the anchor truly went away.
+  //   2. Survive re-renders: React REPLACES the input node, so the anchor
+  //      reference goes stale. A watchdog re-resolves the anchor from
+  //      document.activeElement instead of holding a dead node, and the
+  //      outside-click handler never treats a login input as "outside".
+  //   3. Update IN PLACE: re-offers for the same anchor reuse the host and
+  //      just swap the rows - no remove/rebuild flicker - and an async
+  //      sequence guard stops a slow older offer() from clobbering a newer one.
   let menuHost = null;
+  let menuList = null;       // the row container inside the shadow root
+  let menuAnchor = null;     // the field the menu belongs to
   let menuItems = [];        // [{action}] in render order
   let menuActive = -1;
   let menuRows = [];
+  let menuWatch = null;      // re-anchor watchdog while open
 
   function closeMenu() {
     if (menuHost) { menuHost.remove(); menuHost = null; }
+    if (menuWatch) { clearInterval(menuWatch); menuWatch = null; }
+    menuList = null; menuAnchor = null;
     menuItems = []; menuRows = []; menuActive = -1;
   }
 
@@ -159,15 +177,30 @@
     if (idx >= 0 && menuRows[idx]) menuRows[idx].scrollIntoView({ block: "nearest" });
   }
 
-  function showMenu(anchor, items) {
-    closeMenu();
-    if (!items.length) return;
-    const p = palette();
-    const r = anchor.getBoundingClientRect();
-    const width = Math.min(360, Math.max(r.width, 260));
-    const estH = Math.min(320, 34 + items.length * 36);
+  function anchorAlive() {
+    return menuAnchor && menuAnchor.isConnected &&
+           menuAnchor.offsetParent !== null;
+  }
 
-    // Clamp into the viewport; flip above the field when the bottom is tight.
+  function reanchorOrClose() {
+    if (anchorAlive()) { positionMenu(); return; }
+    // React replaced the node: adopt the currently-focused login input
+    const ae = document.activeElement;
+    if (ae && ae.tagName === "INPUT" && (isPw(ae) || looksLikeUserField(ae))) {
+      menuAnchor = ae;
+      lastAnchor = ae;
+      positionMenu();
+      return;
+    }
+    closeMenu();
+  }
+
+  function positionMenu() {
+    if (!menuHost || !anchorAlive()) return;
+    const r = menuAnchor.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) { closeMenu(); return; }
+    const width = Math.min(360, Math.max(r.width, 260));
+    const estH = Math.min(320, 34 + menuItems.length * 36);
     let left = window.scrollX + r.left;
     const maxLeft = window.scrollX + document.documentElement.clientWidth - width - 6;
     left = Math.max(window.scrollX + 6, Math.min(left, maxLeft));
@@ -175,38 +208,56 @@
     if (r.bottom + estH > window.innerHeight && r.top - estH > 0) {
       top = window.scrollY + r.top - estH - 2;
     }
+    menuHost.style.left = left + "px";
+    menuHost.style.top = top + "px";
+    menuHost.style.width = width + "px";
+  }
 
-    menuHost = document.createElement("div");
-    menuHost.style.cssText =
-      `position:absolute;z-index:2147483647;left:${left}px;top:${top}px;width:${width}px`;
-    const root = menuHost.attachShadow({ mode: "closed" });
-    root.innerHTML = `<style>
-      .menu { background:${p.bg}; color:${p.text}; border:1px solid ${p.border};
-              border-radius:8px; box-shadow:${p.shadow};
-              font:13px system-ui,"Segoe UI",sans-serif; overflow:hidden;
-              max-height:${estH}px; display:flex; flex-direction:column; }
-      .head { display:flex; align-items:center; gap:6px; padding:6px 10px;
-              font-size:11px; font-weight:600; color:${p.muted};
-              border-bottom:1px solid ${p.border}; flex:none; }
-      .list { overflow-y:auto; }
-      .row { padding:8px 10px; cursor:pointer; display:flex; gap:8px;
-             align-items:baseline; min-width:0; }
-      .row .main { font-weight:600; white-space:nowrap; overflow:hidden;
-                   text-overflow:ellipsis; max-width:60%; flex:none; }
-      .row .sub { color:${p.muted}; font-size:12px; white-space:nowrap;
-                  overflow:hidden; text-overflow:ellipsis; min-width:0; }
-      .row .only { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    </style>`;
-    const menu = document.createElement("div");
-    menu.className = "menu";
-    const head = document.createElement("div");
-    head.className = "head";
-    head.innerHTML = lockSvg(p.accent, 12) + "<span>SecureVault</span>";
-    menu.appendChild(head);
-    const list = document.createElement("div");
-    list.className = "list";
+  function showMenu(anchor, items) {
+    if (!items.length) { closeMenu(); return; }
+    const p = palette();
+    const sameAnchor = menuHost && (anchor === menuAnchor || !anchor.isConnected);
+    if (!sameAnchor) {
+      closeMenu();
+      menuHost = document.createElement("div");
+      menuHost.style.cssText = "position:absolute;z-index:2147483647";
+      const root = menuHost.attachShadow({ mode: "closed" });
+      root.innerHTML = `<style>
+        .menu { background:${p.bg}; color:${p.text}; border:1px solid ${p.border};
+                border-radius:8px; box-shadow:${p.shadow};
+                font:13px system-ui,"Segoe UI",sans-serif; overflow:hidden;
+                max-height:320px; display:flex; flex-direction:column; }
+        .head { display:flex; align-items:center; gap:6px; padding:6px 10px;
+                font-size:11px; font-weight:600; color:${p.muted};
+                border-bottom:1px solid ${p.border}; flex:none; }
+        .list { overflow-y:auto; }
+        .row { padding:8px 10px; cursor:pointer; display:flex; gap:8px;
+               align-items:baseline; min-width:0; }
+        .row .main { font-weight:600; white-space:nowrap; overflow:hidden;
+                     text-overflow:ellipsis; max-width:60%; flex:none; }
+        .row .sub { color:${p.muted}; font-size:12px; white-space:nowrap;
+                    overflow:hidden; text-overflow:ellipsis; min-width:0; }
+        .row .only { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      </style>`;
+      const menu = document.createElement("div");
+      menu.className = "menu";
+      const head = document.createElement("div");
+      head.className = "head";
+      head.innerHTML = lockSvg(p.accent, 12) + "<span>SecureVault</span>";
+      menu.appendChild(head);
+      menuList = document.createElement("div");
+      menuList.className = "list";
+      menu.appendChild(menuList);
+      root.appendChild(menu);
+      document.documentElement.appendChild(menuHost);
+      menuAnchor = anchor;
+      menuWatch = setInterval(reanchorOrClose, 400);
+    }
+    // (re)fill the rows in place
+    menuList.textContent = "";
     menuItems = items;
     menuRows = [];
+    menuActive = -1;
     items.forEach((it, i) => {
       const row = document.createElement("div");
       row.className = "row";
@@ -224,18 +275,24 @@
       row.addEventListener("mouseenter", () => highlight(i));
       row.addEventListener("mouseleave", () => highlight(-1));
       row.addEventListener("mousedown", (e) => { e.preventDefault(); closeMenu(); it.action(); });
-      list.appendChild(row);
+      menuList.appendChild(row);
       menuRows.push(row);
     });
-    menu.appendChild(list);
-    root.appendChild(menu);
-    document.documentElement.appendChild(menuHost);
+    positionMenu();
   }
 
   document.addEventListener("click", (e) => {
-    if (menuHost && !e.composedPath().includes(menuHost)) closeMenu();
+    if (!menuHost) return;
+    if (e.composedPath().includes(menuHost)) return;      // inside the menu
+    const t = e.target;
+    // clicking a login input (the anchor, or its re-rendered replacement) is
+    // not "outside" - focusin will re-offer for it
+    if (t && t.tagName === "INPUT" && (isPw(t) || looksLikeUserField(t))) return;
+    closeMenu();
   }, true);
-  window.addEventListener("scroll", closeMenu, true);
+  // scroll REPOSITIONS (rule 1); resize too
+  window.addEventListener("scroll", () => positionMenu(), true);
+  window.addEventListener("resize", () => positionMenu(), true);
 
   // Keyboard: arrows move, Enter picks, Escape closes. Capture phase so the
   // page doesn't see the keys we consume while our menu is open.
@@ -313,12 +370,15 @@
 
   // ---- build and show the offer for whatever field was focused
   let lastAnchor = null;
+  let offerSeq = 0;          // async guard: only the NEWEST offer may render
   async function offer(anchor) {
     lastAnchor = anchor;
+    const seq = ++offerSeq;
     const pwField = pwFieldFor(anchor);
     const anchorIsUser = !isPw(anchor);
     if (!pwField && !anchorIsUser) return false; // nothing we can help with here
     const r = await call({ op: "query" });
+    if (seq !== offerSeq) return false;          // a newer offer superseded us
     if (!r || !r.ok) {
       if (r && r.error) showMenu(anchor, [{ label: "SecureVault: " + r.error, action: () => {} }]);
       return false;
@@ -337,6 +397,7 @@
     // (e.g. a new signup). These fill only the username field, not a password.
     if (anchorIsUser) {
       const idr = await call({ op: "identities" });
+      if (seq !== offerSeq) return false;
       if (idr && idr.ok) {
         const shown = new Set(matches.map((m) => (m.username || "").toLowerCase()));
         const typed = (anchor.value || "").trim().toLowerCase();
@@ -362,6 +423,7 @@
         }
       });
     }
+    if (seq !== offerSeq) return false;
     showMenu(anchor, items);
     return items.length > 0;
   }
@@ -422,9 +484,18 @@
   try { _obs.observe(document.documentElement, { childList: true, subtree: true }); } catch (e) {}
   setTimeout(() => { try { _obs.disconnect(); } catch (e) {} }, 15000);
 
-  // as the user types their email, re-narrow the open menu in place
+  // as the user types their email, re-narrow the open menu IN PLACE -
+  // debounced, so a keystroke burst is one update, not a flicker per key
+  let inputDeb = null;
   document.addEventListener("input", (e) => {
-    if (menuHost && lastAnchor && looksLikeUserField(e.target)) offer(lastAnchor);
+    if (!menuHost || !lastAnchor || !looksLikeUserField(e.target)) return;
+    if (inputDeb) clearTimeout(inputDeb);
+    const target = e.target;
+    inputDeb = setTimeout(() => {
+      inputDeb = null;
+      // the anchor may have been re-rendered out from under us (React)
+      offer(lastAnchor && lastAnchor.isConnected ? lastAnchor : target);
+    }, 150);
   }, true);
 
   // ---- on submit, report the credential so the app can offer save/update

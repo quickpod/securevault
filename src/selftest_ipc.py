@@ -153,6 +153,38 @@ r = svipc.call({"op": "ping"}, timeout_ms=600)
 check(not r.get("ok") and "not open/unlocked" in r.get("error", ""),
       "after stop (= lock/close), calls fail closed with 'not open/unlocked'")
 
+# --------------------------------------------------- socketpair carve-out
+# GLib's Python bindings need socketpair() for signal wakeup; blocking it
+# killed the tray's event loop (field defect). AF_UNIX pairs must work,
+# anything routable must not.
+if os.name != "nt":
+    a, b = socket.socketpair()
+    a.close(); b.close()
+    check(True, "AF_UNIX socketpair works (GLib main loops can run)")
+    try:
+        socket.socketpair(socket.AF_INET)
+        check(False, "non-UNIX socketpair blocked")
+    except OSError:
+        check(True, "non-UNIX socketpair blocked")
+
+# ------------------------------------------------ single-instance activation
+svipc.ACTIVATE_ADDRESS = (ADDR + ".act") if os.name != "nt" else \
+    (svipc.ACTIVATE_ADDRESS + f".test{os.getpid()}")
+hits = []
+act = svipc.ActivationServer(lambda: hits.append(1))
+act.start()
+deadline = time.monotonic() + 5
+while time.monotonic() < deadline and not os.path.exists(svipc.ACTIVATE_ADDRESS) \
+        and os.name != "nt":
+    time.sleep(0.05)
+check(svipc.activate_running(), "activation poke reaches a running instance")
+time.sleep(0.3)
+check(len(hits) >= 1, "on_activate fired ('show yourself')")
+act.stop()
+act.join(timeout=5)
+check(not svipc.activate_running(timeout_ms=400),
+      "no instance -> activate_running is False (fresh launch proceeds)")
+
 import shutil
 shutil.rmtree(_tmp, ignore_errors=True)
 print("\n" + ("ALL PASS" if not fails else f"{fails} FAILED"))

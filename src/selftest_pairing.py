@@ -155,6 +155,47 @@ r = browser.call(svc, "save", "https://new.example.com",
 check(r.get("ok") and r.get("staged") == "save", "paired save is staged")
 check(len(app.scheduled) == 1, "save was marshalled to the UI thread for confirmation")
 
+print("\n-- bookmarks backup (favorites sync) --")
+ROOTS = [{"title": "Bookmarks bar", "children": [
+            {"title": "Bank", "url": "https://bank.example.com"},
+            {"title": "Work", "children": [
+                {"title": "Mail", "url": "https://mail.example.com"}]}]},
+         {"title": "Other bookmarks", "children": []}]
+
+r = svc._handle({"op": "bookmarks_save", "origin": "",
+                 "data": {"roots": ROOTS}, "count": 2})
+check(not r.get("ok"), "unsigned bookmarks_save REFUSED")
+
+r = browser.call(svc, "bookmarks_status")
+check(r.get("ok") and not r.get("have"), "status: nothing backed up yet")
+
+r = browser.call(svc, "bookmarks_save", data={"roots": ROOTS}, count=2)
+check(r.get("ok") and r.get("count") == 2, "signed bookmarks_save stores the set")
+
+r = browser.call(svc, "bookmarks_save", data={"roots": []}, count=0)
+check(not r.get("ok") and r.get("code") == "empty",
+      "an EMPTY browser can never overwrite a real backup")
+
+r = browser.call(svc, "bookmarks_status")
+check(r.get("ok") and r.get("count") == 2 and r.get("have"),
+      "status reflects the stored backup")
+
+r = browser.call(svc, "bookmarks_get")
+check(r.get("ok") and r["data"]["roots"][0]["children"][0]["url"]
+      == "https://bank.example.com", "bookmarks_get returns the stored tree")
+
+svc_b = svpassgui.AutofillService(FakeApp(),
+                                  sv.Vault(dat).unlock(PW, svtotp.totp(SECRET)))
+r = svc_b._handle({"op": "bookmarks_get", "origin": ""})
+check(not r.get("ok"), "bookmarks_get without a signature REFUSED (new instance)")
+check(svc.bookmarks_info() and svc.bookmarks_info().get("count") == 2,
+      "vault UI accessor sees the backup")
+check(svc.delete_bookmarks(), "vault UI can delete the backup")
+r = browser.call(svc, "bookmarks_status")
+check(r.get("ok") and not r.get("have"), "deleted backup is gone")
+# restore one for the persistence check below
+browser.call(svc, "bookmarks_save", data={"roots": ROOTS}, count=2)
+
 print("\n-- the pairing survives a restart, the challenge does not --")
 svc2 = svpassgui.AutofillService(FakeApp(), sv.Vault(dat).unlock(PW, svtotp.totp(SECRET)))
 check(svc2._handle({"op": "ping"}).get("paired") == 1,

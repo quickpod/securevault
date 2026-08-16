@@ -245,3 +245,53 @@ def keypad_button(parent, digit, command):
     b.bind("<Enter>", lambda _e: b.configure(bg=TH.accent_soft))
     b.bind("<Leave>", lambda _e: b.configure(bg=TH.surface2))
     return b
+
+
+class FlowBar(tk.Frame):
+    """A toolbar that WRAPS instead of clipping.
+
+    Field defect (owner's laptop, 1366x768): action rows built with
+    pack(side="left") silently clip their tail when the window is narrower
+    than the row - "Passwords"/"Browsers..." simply vanished at the restored
+    window size. A FlowBar lays its children out grid-wise and re-flows them
+    into as many rows as the current width needs, so every action stays
+    reachable at ANY sane window size. Add children with .add(widget) instead
+    of packing them.
+    """
+
+    def __init__(self, master, hpad=2, vpad=2, **kw):
+        kw.setdefault("bg", TH.bg)
+        super().__init__(master, **kw)
+        self._items = []
+        self._hpad, self._vpad = hpad, vpad
+        self._layout = None
+        self.bind("<Configure>", lambda _e: self._place())
+
+    def add(self, widget):
+        self._items.append(widget)
+        self._place(force=True)
+        return widget
+
+    def _place(self, force=False):
+        width = self.winfo_width()
+        if width <= 1:                      # not mapped yet - try again shortly
+            self.after(60, lambda: self._place(True))
+            return
+        x = row = col = 0
+        layout = []
+        for c in self._items:
+            cw = c.winfo_reqwidth() + 2 * self._hpad
+            if col > 0 and x + cw > width:
+                row += 1
+                col = 0
+                x = 0
+            layout.append((c, row, col))
+            x += cw
+            col += 1
+        key = [(id(c), r, cl) for c, r, cl in layout]
+        if not force and key == self._layout:
+            return                          # stable: no re-grid, no loops
+        self._layout = key
+        for c, r, cl in layout:
+            c.grid(row=r, column=cl, padx=self._hpad, pady=self._vpad,
+                   sticky="w")

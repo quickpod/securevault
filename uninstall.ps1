@@ -119,6 +119,18 @@ foreach ($k in $hostKeys) {
 }
 Write-Host ""
 
+# --------------------------------------------- 3b. login autostart (HKCU Run)
+Write-Host "3b. Removing the start-at-login entry..." -ForegroundColor Cyan
+$runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$runVal = 'QuickOpenSecureVault'
+if ((Get-ItemProperty -Path $runKey -Name $runVal -ErrorAction SilentlyContinue)) {
+    if ($PSCmdlet.ShouldProcess("$runKey\$runVal", 'remove Run value')) {
+        try { Remove-ItemProperty -Path $runKey -Name $runVal -Force; Ok "removed $runVal" }
+        catch { Warn "could not remove ${runVal}: $($_.Exception.Message)" }
+    }
+} else { Skip "$runVal (not present)" }
+Write-Host ""
+
 # --------------------------------------------------------- 4. delete install dir
 Write-Host "4. Deleting the install directory..." -ForegroundColor Cyan
 if (Test-Path $InstallRoot) {

@@ -15,7 +15,7 @@ Design notes that matter:
     not the daemon-thread timer svpass uses for the transient CLI.
 """
 
-import os, sys, time
+import os, sys, time, json
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog
 
@@ -33,8 +33,9 @@ class PasswordManager(tk.Toplevel):
         svtheme.ensure(self)
         self.title("SecureVault - Passwords")
         self.configure(bg=TH.bg)
-        self.geometry("1020x580")
-        self.minsize(860, 460)
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        self.geometry(f"{min(1020, sw - 60)}x{min(580, sh - 120)}")
+        self.minsize(520, 380)              # toolbars wrap, nothing clips
         self.store = svpass.PasswordStore(vault)
         self.store.load()
         self._clip_after = None
@@ -60,27 +61,36 @@ class PasswordManager(tk.Toplevel):
         # window, which is how "Browsers..." became unreachable. Splitting by
         # frequency also reads better: the things you do to an ENTRY on top,
         # the things you do to the WHOLE STORE underneath.
+        # Buttons pack FIRST (right side) so a narrow window shrinks the search
+        # entry instead of clipping actions; the store-wide tools live in a
+        # WRAPPING FlowBar - "Browsers..." disappearing on a 1366x768 laptop at
+        # restored size is exactly the failure this prevents (field defect).
         top = ttk.Frame(self, padding=(6, 10, 6, 2)); top.pack(fill="x")
         ttk.Label(top, text="Search:").pack(side="left")
         self.q = tk.StringVar()
-        e = ttk.Entry(top, textvariable=self.q)
+        for txt, cmd, style in (("Delete", self.delete, None),
+                                ("Edit", self.edit, None),
+                                ("Add", self.add, "Accent.TButton")):
+            kw = {"style": style} if style else {}
+            ttk.Button(top, text=txt, command=cmd, **kw).pack(side="right", padx=2)
+        e = ttk.Entry(top, textvariable=self.q, width=12)
         e.pack(side="left", padx=6, fill="x", expand=True)
         e.bind("<KeyRelease>", lambda _e: self.refresh())
         e.focus_set()
-        ttk.Button(top, text="Add", command=self.add,
-                   style="Accent.TButton").pack(side="left", padx=2)
-        ttk.Button(top, text="Edit", command=self.edit).pack(side="left", padx=2)
-        ttk.Button(top, text="Delete", command=self.delete).pack(side="left", padx=2)
 
-        tools = ttk.Frame(self, padding=(6, 2, 6, 6)); tools.pack(fill="x")
+        tools = svtheme.FlowBar(self, hpad=2, vpad=2)
+        tools.pack(fill="x", padx=6, pady=(2, 6))
         for txt, cmd in (("Generate...", self.generate),
                          ("Import Chrome CSV...", self.import_chrome),
                          ("Audit...", self.audit),
                          ("Browsers...", self.browsers)):
-            ttk.Button(tools, text=txt, command=cmd).pack(side="left", padx=2)
+            tools.add(ttk.Button(tools, text=txt, command=cmd))
 
         cols = ("title", "username", "domain", "strength", "twofa")
-        self.tree = ttk.Treeview(self, columns=cols, show="headings", selectmode="browse")
+        # height=5, same reason as the main window: the 10-row default minimum
+        # pushed the copy-actions bar off the bottom at small heights
+        self.tree = ttk.Treeview(self, columns=cols, show="headings",
+                                 selectmode="browse", height=5)
         for c, w, t in (("title", 220, "Title"), ("username", 220, "Username"),
                         ("domain", 200, "Domain"), ("strength", 120, "Strength"),
                         ("twofa", 60, "2FA")):
@@ -90,14 +100,17 @@ class PasswordManager(tk.Toplevel):
         self.tree.bind("<Double-1>", lambda _e: self.copy_password())
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self._sync_totp())
 
-        act = ttk.Frame(self, padding=6); act.pack(fill="x")
-        ttk.Button(act, text="Copy password", command=self.copy_password).pack(side="left", padx=2)
-        ttk.Button(act, text="Copy username", command=self.copy_username).pack(side="left", padx=2)
-        ttk.Button(act, text="Copy TOTP", command=self.copy_totp).pack(side="left", padx=2)
-        ttk.Button(act, text="Open URL in browser", command=self.open_url).pack(side="left", padx=2)
+        act = svtheme.FlowBar(self, hpad=2, vpad=2)
+        act.pack(fill="x", padx=6, pady=6)
+        for txt, cmd in (("Copy password", self.copy_password),
+                         ("Copy username", self.copy_username),
+                         ("Copy TOTP", self.copy_totp),
+                         ("Open URL in browser", self.open_url)):
+            act.add(ttk.Button(act, text=txt, command=cmd))
         self.status = tk.StringVar(value="")
-        ttk.Label(act, textvariable=self.status,
-                  foreground=TH.good).pack(side="right")
+        statusbar = ttk.Frame(self, padding=(6, 0, 6, 6)); statusbar.pack(fill="x")
+        ttk.Label(statusbar, textvariable=self.status,
+                  foreground=TH.good).pack(side="left")
 
     # ------------------------------------------------------------------ data
     def refresh(self):
@@ -524,6 +537,19 @@ class AutofillService:
         self._last_used.pop(client_id, None)
         return gone
 
+    # ---- bookmarks backup surface for the vault UI
+    def bookmarks_info(self):
+        with self._lock:
+            return self._store().bookmarks()
+
+    def delete_bookmarks(self):
+        with self._lock:
+            s = self._store()
+            gone = s.clear_bookmarks()
+            if gone:
+                s.save()
+        return gone
+
     def _do_register(self, req):
         with self._pair_lock:
             win = self._pairing
@@ -620,6 +646,46 @@ class AutofillService:
             # marshal the confirm banner onto the Tk main thread
             self.app.after(0, lambda: self._prompt(op, req))
             return {"ok": True, "staged": op}
+
+        # ---- favorites sync (bookmarks live in the encrypted blob)
+        if op == "bookmarks_status":
+            with self._lock:
+                b = self._store().bookmarks()
+            return {"ok": True,
+                    "count": (b or {}).get("count", 0),
+                    "saved_at": (b or {}).get("saved_at", 0),
+                    "label": (b or {}).get("label", ""),
+                    "have": bool(b)}
+        if op == "bookmarks_save":
+            data = req.get("data")
+            roots = (data or {}).get("roots")
+            try:
+                count = int(req.get("count", 0))
+            except (TypeError, ValueError):
+                count = 0
+            if not isinstance(roots, list):
+                return {"ok": False, "error": "bad bookmarks payload"}
+            if count < 1:
+                # never let an empty browser overwrite a real backup - the
+                # restore flow is how an empty browser meets the vault
+                return {"ok": False, "error": "refusing to store an empty "
+                                              "bookmark set", "code": "empty"}
+            if len(json.dumps(roots)) > 4 * 1024 * 1024:
+                return {"ok": False, "error": "bookmark payload too large"}
+            with self._lock:
+                s = self._store()
+                client = s.clients().get(req.get("client_id", ""), {})
+                s.set_bookmarks(roots, count, client.get("label", ""))
+                s.save()
+            return {"ok": True, "count": count}
+        if op == "bookmarks_get":
+            with self._lock:
+                b = self._store().bookmarks()
+            if not b:
+                return {"ok": False, "error": "no bookmarks backed up",
+                        "code": "none"}
+            return {"ok": True, "data": {"roots": b.get("roots", [])},
+                    "count": b.get("count", 0), "saved_at": b.get("saved_at", 0)}
         return {"ok": False, "error": f"bad op {op!r}"}
 
     # ---- Tk-thread UI: the save / update banner
@@ -696,7 +762,8 @@ class BrowserPairingDialog(tk.Toplevel):
         self.svc = svc
         self.title("SecureVault - Paired Browsers")
         self.configure(bg=TH.bg)
-        self.geometry("640x400")
+        self.geometry("640x470")
+        self.minsize(520, 400)
         self.transient(master)
         self._tick_after = None
         self._build()
@@ -713,12 +780,26 @@ class BrowserPairingDialog(tk.Toplevel):
                        "and it stops filling immediately.").pack(anchor="w")
 
         cols = ("label", "paired", "used")
-        self.tree = ttk.Treeview(self, columns=cols, show="headings", selectmode="browse")
+        # height=5, same reason as the main window: the 10-row default minimum
+        # pushed the copy-actions bar off the bottom at small heights
+        self.tree = ttk.Treeview(self, columns=cols, show="headings",
+                                 selectmode="browse", height=5)
         for c, w, t in (("label", 300, "Browser"), ("paired", 150, "Paired"),
                         ("used", 150, "Last used")):
             self.tree.heading(c, text=t)
             self.tree.column(c, width=w, anchor="w")
         self.tree.pack(fill="both", expand=True, padx=10)
+
+        # Browser data: the bookmarks backup captured through the pairing.
+        bm = ttk.Frame(self, padding=(10, 2, 10, 0)); bm.pack(fill="x")
+        ttk.Label(bm, text="Browser data", font=(UI, 10, "bold")).pack(anchor="w")
+        row = ttk.Frame(self, padding=(10, 0, 10, 2)); row.pack(fill="x")
+        self.bm_var = tk.StringVar(value="")
+        ttk.Label(row, textvariable=self.bm_var, foreground=TH.muted,
+                  wraplength=430, justify="left").pack(side="left")
+        self._bm_del = ttk.Button(row, text="Delete backup",
+                                  command=self._delete_bookmarks)
+        self._bm_del.pack(side="right", padx=3)
 
         bar = ttk.Frame(self, padding=10); bar.pack(fill="x")
         ttk.Button(bar, text="Pair a browser...", command=self.pair).pack(side="left", padx=3)
@@ -733,6 +814,30 @@ class BrowserPairingDialog(tk.Toplevel):
             self.tree.insert("", "end", iid=cid,
                              values=(c.get("label", "browser"),
                                      fmt(c.get("paired_at", 0)), fmt(c.get("last_used", 0))))
+        try:
+            b = self.svc.bookmarks_info()
+        except Exception:
+            b = None
+        if b:
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(b.get("saved_at", 0)))
+            src = f" from {b['label']}" if b.get("label") else ""
+            self.bm_var.set(f"Bookmarks backup: {b.get('count', 0)} bookmark(s), "
+                            f"saved {when}{src}. A paired browser can restore "
+                            "them from its SecureVault popup.")
+            self._bm_del.configure(state="normal")
+        else:
+            self.bm_var.set("Bookmarks backup: none yet - a paired browser "
+                            "backs its bookmarks up here automatically.")
+            self._bm_del.configure(state="disabled")
+
+    def _delete_bookmarks(self):
+        if not messagebox.askyesno("SecureVault",
+                                   "Delete the bookmarks backup from the vault?\n"
+                                   "Browsers keep their own copies; only the "
+                                   "vault snapshot is removed.", parent=self):
+            return
+        self.svc.delete_bookmarks()
+        self.refresh()
 
     # ---- pair
     def pair(self):

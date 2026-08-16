@@ -47,8 +47,60 @@ async function refresh() {
   if (!st.paired && !showingPair) {
     $("pin").focus();                 // box just appeared: type the PIN at once
   }
-  if (st.paired) siteInfo();
+  if (st.paired) { siteInfo(); bmInfo(); }
 }
+
+// ---- bookmarks sync surface
+let bmShown = "";
+async function bmInfo() {
+  const r = await send({ op: "bm-status" });
+  const box = $("bmbox");
+  if (!r.ok) { show(box, false); bmShown = ""; return; }
+  show(box, true);
+  const when = r.saved_at ? new Date(r.saved_at * 1000).toLocaleString() : "";
+  const line = r.have
+    ? `Bookmarks: ${r.vault} in vault (backed up ${when}) · ${r.local} in this browser`
+    : `Bookmarks: none in vault yet · ${r.local} in this browser`;
+  if (line !== bmShown) { $("bmline").textContent = line; bmShown = line; }
+  $("bmrestore").disabled = !r.have;
+}
+
+function bmOfferRestore(n) {
+  show($("bmbox"), true);
+  show($("bmconfirm"), true);
+  $("bmconfirmtext").textContent =
+    `This browser has no bookmarks. Restore the ${n} saved in your vault?`;
+}
+
+$("bmbackup").addEventListener("click", async () => {
+  $("msg2").textContent = "backing up…";
+  const r = await send({ op: "bm-backup" });
+  $("msg2").textContent = r.ok ? `backed up ${r.count} bookmark(s)`
+                               : (r.error || "backup failed");
+  bmShown = ""; bmInfo();
+});
+
+$("bmrestore").addEventListener("click", async () => {
+  const st = await send({ op: "bm-status" });
+  if (!st.ok || !st.have) return;
+  show($("bmconfirm"), true);
+  $("bmconfirmtext").textContent =
+    `Restore ${st.vault} bookmark(s) from the vault? Merge adds what's ` +
+    `missing (no duplicates); Replace all clears this browser's bookmarks first.`;
+});
+
+async function bmDoRestore(mode) {
+  show($("bmconfirm"), false);
+  $("msg2").textContent = "restoring…";
+  const r = await send({ op: "bm-restore", mode });
+  $("msg2").textContent = r.ok
+    ? `restored - ${r.created} bookmark(s) added`
+    : (r.error || "restore failed");
+  bmShown = ""; bmInfo();
+}
+$("bmmerge").addEventListener("click", () => bmDoRestore("merge"));
+$("bmreplace").addEventListener("click", () => bmDoRestore("replace"));
+$("bmcancel").addEventListener("click", () => show($("bmconfirm"), false));
 
 let siteShown = "";
 async function siteInfo() {
@@ -89,6 +141,7 @@ $("pairbtn").addEventListener("click", async () => {
     msg.textContent = "Paired.";
     $("pin").value = "";
     refresh();
+    if (r.offer_restore) bmOfferRestore(r.offer_restore);
   } else {
     msg.className = "err";
     // The vault's own words: "wrong PIN (2 attempts left)", "no pairing window

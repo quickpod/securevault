@@ -25,6 +25,15 @@ import securevault as sv
 
 def main():
     argv = sys.argv[1:]
+    # login autostart: start LOCKED, minimized to the tray - no window, no
+    # prompt. (--minimized kept as an alias; both imply the GUI process.)
+    if argv and argv[0] in ("--locked", "--minimized", "--tray"):
+        try:
+            import svgui
+        except ImportError:
+            return 2               # display deps missing: nothing to show anyway
+        svgui.main(start_locked=True)
+        return 0
     if argv:                       # any argument => CLI / shell action
         return sv.main(argv)
     try:

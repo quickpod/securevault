@@ -63,6 +63,7 @@ def load():
         data.setdefault("theme", "system")
         data.setdefault("on_close", "ask")
         data.setdefault("autolock_minutes", DEFAULT_AUTOLOCK_MIN)
+        data.setdefault("autostart", None)   # None = never decided (no vault yet)
         rec = data.get("recent")
         data["recent"] = [str(p) for p in rec] if isinstance(rec, list) else []
         return data
@@ -79,7 +80,8 @@ AUTOLOCK_MIN, AUTOLOCK_MAX = 1, 240
 
 def _default():
     return {"last_vault": None, "recent": [], "theme": "system",
-            "on_close": "ask", "autolock_minutes": DEFAULT_AUTOLOCK_MIN}
+            "on_close": "ask", "autolock_minutes": DEFAULT_AUTOLOCK_MIN,
+            "autostart": None}
 
 
 def save(cfg):
@@ -93,7 +95,8 @@ def save(cfg):
                        "recent": list(cfg.get("recent", []))[:MAX_RECENT],
                        "theme": cfg.get("theme", "system"),
                        "on_close": cfg.get("on_close", "ask"),
-                       "autolock_minutes": autolock_minutes(cfg)},
+                       "autolock_minutes": autolock_minutes(cfg),
+                       "autostart": cfg.get("autostart")},
                       f, indent=2)
         os.replace(tmp, config_path())
         return True
@@ -192,3 +195,15 @@ if __name__ == "__main__":
     import sys
     print(json.dumps(load(), indent=2))
     print("config file:", config_path(), file=sys.stderr)
+
+
+def autostart_pref():
+    """True/False once decided; None until the first vault has been opened."""
+    v = load().get("autostart")
+    return v if v in (True, False, None) else None
+
+
+def set_autostart(value):
+    cfg = load()
+    cfg["autostart"] = bool(value)
+    save(cfg)

@@ -286,6 +286,110 @@ class PipeServer(threading.Thread):
                 except OSError: pass
 
 
+# -------------------------------------------------------------- activation
+# Single-instance activation: launching SecureVault while an instance is
+# already running (visible, trayed, or locked-in-tray) must RAISE that
+# instance, never error or spawn a second one - it is also the guaranteed way
+# back to a background vault even if the tray icon is hidden. The channel is
+# deliberately dumb: CONNECTING is the whole message ("show yourself"), no
+# payload is read, nothing secret crosses it, and showing the window grants
+# nothing (unlocking still takes all three factors). Same-user only on Linux
+# via the 0700 runtime dir.
+ACTIVATE_ADDRESS = (r"\\.\pipe\SecureVault.activate" if IS_WINDOWS
+                    else os.path.join(os.path.dirname(_default_address()),
+                                      "activate.sock"))
+
+
+class ActivationServer(threading.Thread):
+    """Runs for the app's whole life. `on_activate()` fires on the server
+    thread for every connection - marshal it (the callers push onto the tray
+    event queue, which the Tk side drains)."""
+    daemon = True
+
+    def __init__(self, on_activate):
+        super().__init__(name="SecureVault-Activate")
+        self.on_activate = on_activate
+        self._stopping = threading.Event()
+        self._listener = None
+
+    def stop(self):
+        self._stopping.set()
+        try:
+            c = Client(ACTIVATE_ADDRESS, family=FAMILY)
+            c.close()
+        except Exception:
+            pass
+
+    def run(self):
+        try:
+            if not IS_WINDOWS:
+                _ensure_private_dir(os.path.dirname(ACTIVATE_ADDRESS))
+                try:
+                    os.unlink(ACTIVATE_ADDRESS)
+                except OSError:
+                    pass
+            self._listener = Listener(ACTIVATE_ADDRESS, family=FAMILY)
+            if not IS_WINDOWS:
+                os.chmod(ACTIVATE_ADDRESS, 0o600)
+        except Exception:
+            return
+        try:
+            while not self._stopping.is_set():
+                try:
+                    conn = self._listener.accept()
+                except Exception:
+                    if self._stopping.is_set():
+                        break
+                    continue
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                if self._stopping.is_set():
+                    break
+                try:
+                    self.on_activate()
+                except Exception:
+                    pass
+        finally:
+            try:
+                self._listener.close()
+            except Exception:
+                pass
+            if not IS_WINDOWS:
+                try:
+                    os.unlink(ACTIVATE_ADDRESS)
+                except OSError:
+                    pass
+
+
+def activate_running(timeout_ms=1200) -> bool:
+    """True if a running instance accepted the 'show yourself' poke."""
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    while time.monotonic() < deadline:
+        if IS_WINDOWS and not _pipe_ready_at(ACTIVATE_ADDRESS, 200):
+            time.sleep(0.05)
+            continue
+        if not IS_WINDOWS and not os.path.exists(ACTIVATE_ADDRESS):
+            return False
+        try:
+            c = Client(ACTIVATE_ADDRESS, family=FAMILY)
+            c.close()
+            return True
+        except Exception:
+            time.sleep(0.05)
+    return False
+
+
+def _pipe_ready_at(address, timeout_ms) -> bool:
+    if not IS_WINDOWS:
+        return os.path.exists(address)
+    try:
+        return bool(ctypes.windll.kernel32.WaitNamedPipeW(address, int(timeout_ms)))
+    except Exception:
+        return False
+
+
 # ------------------------------------------------------------------ client
 def call(request: dict, timeout_ms=4000) -> dict:
     """One request/reply from the relay side (svhost). The token is the HMAC

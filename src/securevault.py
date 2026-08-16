@@ -77,6 +77,7 @@ def _disable_network():
         raise OSError("SecureVault: network access is permanently disabled")
     if os.name != "nt" and hasattr(socket, "AF_UNIX"):
         real_socket = socket.socket
+        real_socketpair = socket.socketpair
         af_unix = socket.AF_UNIX
 
         class _UnixOnlySocket(real_socket):
@@ -88,17 +89,29 @@ def _disable_network():
                     _blocked()
                 super().__init__(family, type, proto, fileno)
 
+        def _unix_socketpair(family=af_unix, *a, **k):
+            # On POSIX socketpair() IS an AF_UNIX pair - two connected local
+            # fds with no address, no port, no route. GLib's Python bindings
+            # need one for their signal-wakeup plumbing, and blocking it
+            # killed the tray icon's event loop outright (field defect: the
+            # background icon never registered with the StatusNotifierWatcher,
+            # stranding the user). Any other family stays blocked.
+            if family != af_unix:
+                _blocked()
+            return real_socketpair(family, *a, **k)
+
         try:
             socket.socket = _UnixOnlySocket
+            socket.socketpair = _unix_socketpair
         except Exception:
             pass
     else:
-        try:
-            socket.socket = _blocked
-        except Exception:
-            pass
-    for attr in ("socketpair", "create_connection", "create_server",
-                 "fromfd", "fromshare"):
+        # Windows: no AF_UNIX in practice, and CPython emulates socketpair()
+        # over AF_INET loopback - so there the full block stays.
+        for attr in ("socket", "socketpair"):
+            try: setattr(socket, attr, _blocked)
+            except Exception: pass
+    for attr in ("create_connection", "create_server", "fromfd", "fromshare"):
         if hasattr(socket, attr):
             try: setattr(socket, attr, _blocked)
             except Exception: pass
