@@ -7,7 +7,7 @@
 ;   README.md, LICENSE, quickopen-root.crt
 
 #define AppName "SecureVault"
-#define AppVersion "1.0.14"
+#define AppVersion "1.0.15"
 #define AppPublisher "QuickOpen (quickopen.ai)"
 #define AppURL "https://quickopen.ai/projects/securevault"
 
@@ -23,6 +23,18 @@ DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\SecureVault.exe
+; NOTE - unins000.exe is UNSIGNED, and on a machine with Smart App Control
+; or a WDAC policy enforcing, Windows refuses to load it: the Uninstall
+; button in Settings fails with CodeIntegrity 3077/3033 and WinError 4551,
+; leaving the app impossible to remove through the normal route.
+; SignedUninstaller=yes is the proper fix, but it needs a [SignTool]
+; available where ISCC runs, and this project signs OFF-CI on purpose so
+; the certificate never reaches GitHub - setting it here would just break
+; the package job. Two real options, pick one deliberately:
+;   a) move the ISCC step onto the signing machine and turn this on;
+;   b) leave it, and treat uninstall.ps1 as the supported uninstall path
+;      on hardened machines - it needs no signed binary.
+; Until then uninstall.ps1 is the documented fallback.
 OutputDir=dist
 OutputBaseFilename=SecureVault-Setup
 SetupIconFile=..\securevault.ico
@@ -34,7 +46,7 @@ WizardSmallImageFile=branding\wizard-small.bmp
 AppCopyright=Apache-2.0. 100%% AI-built, published on QuickOpen (quickopen.ai).
 VersionInfoCompany=QuickOpen
 VersionInfoProductName=SecureVault
-VersionInfoVersion=1.0.14.0
+VersionInfoVersion=1.0.15.0
 ; Install per-user by default (no admin, and the app directory stays writable so
 ; the browser-autofill wizard can inject the extension key + write the native
 ; host manifest). {autopf} then resolves to %LOCALAPPDATA%\Programs\SecureVault.

@@ -5,7 +5,16 @@
       1. Hardening changes it can (best-effort -Revert on the modular scripts).
       2. The Explorer right-click shell integration (three HKCU keys).
       3. The Chrome/Edge native-messaging host registration.
-      4. The install directory under %LOCALAPPDATA%\SecureVault.
+      4. The install directory (%LOCALAPPDATA%\Programs\SecureVault).
+
+    It deliberately KEEPS %LOCALAPPDATA%\SecureVault: that is user state, not
+    app files - config.json records where your vault lives, signing_key.pem is
+    the browser extension's identity, and backup-logs\ belongs to the backup
+    task. Delete it by hand if you really want a clean slate.
+
+    Useful when Inno's own unins000.exe will not run: it is unsigned, so a
+    machine with Smart App Control or WDAC enforcing refuses to load it
+    (CodeIntegrity 3077/3033). This script needs no signed binary.
 
     It is IDEMPOTENT (safe to run twice) and PRINTS every action. It never
     deletes your SecureVault.dat - move or back that up first if it lives inside
@@ -24,7 +33,19 @@
 #>
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
-    [string] $InstallRoot = (Join-Path $env:LOCALAPPDATA 'SecureVault'),
+    # The Inno installer puts the app in %LOCALAPPDATA%\Programs\SecureVault
+    # ({autopf} under PrivilegesRequired=lowest). This used to default to
+    # %LOCALAPPDATA%\SecureVault, which is the per-user CONFIG directory -
+    # config.json, signing_key.pem, svhost_allowed.json, backup-logs. Running
+    # this script with the old default deleted all of that and left the app
+    # itself installed. Fall back to the old path only for a pre-installer
+    # layout, recognised by SecureVault.exe actually being there.
+    [string] $InstallRoot = $(
+        $inno = Join-Path $env:LOCALAPPDATA 'Programs\SecureVault'
+        $prev = Join-Path $env:LOCALAPPDATA 'SecureVault'
+        if (Test-Path (Join-Path $inno 'SecureVault.exe')) { $inno }
+        elseif (Test-Path (Join-Path $prev 'SecureVault.exe')) { $prev }
+        else { $inno }),
     [switch] $KeepHardening
 )
 
@@ -107,7 +128,11 @@ Write-Host ""
 Write-Host "3. Removing the browser native-messaging host registration..." -ForegroundColor Cyan
 $hostKeys = @(
     'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.securevault.autofill',
-    'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.securevault.autofill'
+    'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.securevault.autofill',
+    # Quick Browser keeps Chromium's registry identity (its branding script
+    # rewrites only BRANDING, the strings .grd and the theme icons), so plain
+    # Chromium and Quick Browser share this key.
+    'HKCU:\Software\Chromium\NativeMessagingHosts\com.securevault.autofill'
 )
 foreach ($k in $hostKeys) {
     if (Test-Path $k) {
@@ -139,6 +164,11 @@ if (Test-Path $InstallRoot) {
         Warn "This directory still contains vault data:"
         $dat | ForEach-Object { Warn "    $($_.FullName)  ($('{0:N2}' -f ($_.Length/1GB)) GB)" }
         Warn "Move these out first if you want to keep them. NOT deleting the directory."
+    } elseif (-not (Test-Path (Join-Path $InstallRoot 'SecureVault.exe'))) {
+        # Refuse to recursively delete a directory that does not hold the app.
+        # Cheap insurance against ever again pointing this at the config dir.
+        Warn "$InstallRoot does not contain SecureVault.exe - refusing to delete it."
+        Warn "Pass -InstallRoot explicitly if the app really lives elsewhere."
     } elseif ($PSCmdlet.ShouldProcess($InstallRoot, 'delete directory')) {
         try { Remove-Item $InstallRoot -Recurse -Force; Ok "deleted $InstallRoot" }
         catch { Warn "could not delete ${InstallRoot}: $($_.Exception.Message)" }
