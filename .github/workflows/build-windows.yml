@@ -22,7 +22,11 @@ jobs:
           python-version: "3.12"
 
       - name: Install build deps
-        run: python -m pip install --upgrade pip cryptography segno customtkinter darkdetect pyinstaller
+        # Install from requirements.txt rather than a hand-kept list: the list
+        # had drifted and was missing pystray and Pillow, so svtray's guarded
+        # import failed at runtime, Tray.available() returned False, and the
+        # app exited on close instead of staying in the notification area.
+        run: python -m pip install --upgrade pip pyinstaller -r requirements.txt
 
       - name: Build SecureVault.exe
         working-directory: src
@@ -42,6 +46,7 @@ jobs:
           --hidden-import svqr --hidden-import svconfig --hidden-import svwizard
           --hidden-import svautofill_setup
           --hidden-import svtheme --hidden-import aura
+          --hidden-import svtray --collect-all pystray --collect-all PIL
           --hidden-import customtkinter --hidden-import darkdetect
           sv_app.py
 
