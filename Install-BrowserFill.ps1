@@ -36,7 +36,13 @@ $Browsers = @(
     @{ Name='Chrome'; Native='HKCU:\Software\Google\Chrome\NativeMessagingHosts';
        Policy='HKLM:\SOFTWARE\Policies\Google\Chrome' },
     @{ Name='Edge';   Native='HKCU:\Software\Microsoft\Edge\NativeMessagingHosts';
-       Policy='HKLM:\SOFTWARE\Policies\Microsoft\Edge' }
+       Policy='HKLM:\SOFTWARE\Policies\Microsoft\Edge' },
+    # Quick Browser keeps Chromium's registry identity: branding/apply-branding.py
+    # rewrites BRANDING, the strings .grd and the theme icons only, so the
+    # registry key and user-data dir stay Chromium's. Plain Chromium lands here
+    # too, which is correct - same key, same host.
+    @{ Name='Quick Browser'; Native='HKCU:\Software\Chromium\NativeMessagingHosts';
+       Policy='HKLM:\SOFTWARE\Policies\Chromium' }
 )
 
 function Test-Elevated {

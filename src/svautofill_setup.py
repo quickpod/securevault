@@ -28,7 +28,17 @@ def paths(root):
         "root": root,
         "ext": os.path.join(root, "extension"),
         "manifest": os.path.join(root, "extension", "manifest.json"),
-        "privkey": os.path.join(root, "extension", "_signing_key.pem"),
+        # NOT inside extension/: Chromium refuses to load an unpacked
+        # extension containing any name that starts with "_" (reserved), so a
+        # key written there made the extension unloadable the moment the wizard
+        # ran. A private key also has no business in a directory that gets
+        # loaded, packed into a .crx or zipped up. Keep it beside the other
+        # per-user state instead.
+        "privkey": os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+                                "SecureVault", "signing_key.pem"),
+        # Pre-1.0.12 location, still read once so an existing install keeps its
+        # extension ID instead of silently minting a new one on upgrade.
+        "privkey_legacy": os.path.join(root, "extension", "_signing_key.pem"),
         "nativehost": os.path.join(root, "nativehost"),
         "hostmanifest": os.path.join(root, "nativehost", HOST_NAME + ".json"),
         "launcher": os.path.join(root, "nativehost", "svhost-launcher.bat"),
@@ -39,7 +49,16 @@ def paths(root):
     }
 
 
-def _load_or_make_key(privkey_path):
+def _load_or_make_key(privkey_path, legacy_path=None):
+    os.makedirs(os.path.dirname(privkey_path), exist_ok=True)
+    # Migrate a pre-1.0.12 key out of extension/ before deciding to generate:
+    # losing it would change the derived extension ID and break every existing
+    # browser pairing.
+    if legacy_path and os.path.isfile(legacy_path) and not os.path.isfile(privkey_path):
+        try:
+            os.replace(legacy_path, privkey_path)
+        except OSError:
+            pass
     if os.path.isfile(privkey_path):
         with open(privkey_path, "rb") as f:
             key = serialization.load_pem_private_key(f.read(), password=None)
@@ -59,8 +78,8 @@ def _load_or_make_key(privkey_path):
     return key
 
 
-def key_and_id(privkey_path):
-    key = _load_or_make_key(privkey_path)
+def key_and_id(privkey_path, legacy_path=None):
+    key = _load_or_make_key(privkey_path, legacy_path)
     der = key.public_key().public_bytes(
         serialization.Encoding.DER,
         serialization.PublicFormat.SubjectPublicKeyInfo)
@@ -85,6 +104,13 @@ def set_allowed_origin(root, origin):
     else:
         host = {"name": HOST_NAME, "description": "SecureVault Autofill host",
                 "path": p["launcher"], "type": "stdio"}
+    # Always (re)assert the launcher path. The installer SHIPS this manifest as
+    # a template whose path is a literal "%LOCALAPPDATA%\SecureVault\..."
+    # placeholder, so the isfile() branch above always won and the else branch
+    # that sets a real path never ran. Chrome does not expand environment
+    # variables here, and that placeholder pointed at the config directory
+    # rather than the install directory, so the host could never launch.
+    host["path"] = p["launcher"]
     host["allowed_origins"] = [origin]
     with open(p["hostmanifest"], "w", encoding="utf-8") as f:
         json.dump(host, f, indent=2)
@@ -98,7 +124,7 @@ def set_allowed_origin(root, origin):
 def apply(root):
     p = paths(root)
     os.makedirs(p["nativehost"], exist_ok=True)
-    manifest_key, ext_id = key_and_id(p["privkey"])
+    manifest_key, ext_id = key_and_id(p["privkey"], p.get("privkey_legacy"))
     origin = f"chrome-extension://{ext_id}/"
 
     # 1. inject the key into the extension manifest

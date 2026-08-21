@@ -7,7 +7,7 @@
 ;   README.md, LICENSE, quickopen-root.crt
 
 #define AppName "SecureVault"
-#define AppVersion "1.0.11"
+#define AppVersion "1.0.12"
 #define AppPublisher "QuickOpen (quickopen.ai)"
 #define AppURL "https://quickopen.ai/projects/securevault"
 
@@ -34,7 +34,7 @@ WizardSmallImageFile=branding\wizard-small.bmp
 AppCopyright=Apache-2.0. 100%% AI-built, published on QuickOpen (quickopen.ai).
 VersionInfoCompany=QuickOpen
 VersionInfoProductName=SecureVault
-VersionInfoVersion=1.0.11.0
+VersionInfoVersion=1.0.12.0
 ; Install per-user by default (no admin, and the app directory stays writable so
 ; the browser-autofill wizard can inject the extension key + write the native
 ; host manifest). {autopf} then resolves to %LOCALAPPDATA%\Programs\SecureVault.
