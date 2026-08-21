@@ -20,11 +20,25 @@ jobs:
           path: packaging/staging
           run-id: ${{ github.event.inputs.build_run_id }}
           github-token: ${{ github.token }}
-      - name: Replace exe with the signed one from the release
+      - name: Replace exes with the signed ones from the release
         shell: pwsh
+        # BOTH binaries must be replaced. svhost.exe is the browser-autofill
+        # native messaging host; it was never downloaded here, so the installer
+        # shipped it straight from the unsigned CI build. On any machine with
+        # Smart App Control or a WDAC policy enforcing, cmd.exe is refused when
+        # the launcher .bat tries to load it (CodeIntegrity 3077/3033, WinError
+        # 4551) and the extension reports only "error while communicating with
+        # native messaging host" - no clue that a signature is the cause.
+        # Verify both and fail the build rather than ship unsigned again.
         run: |
-          gh release download "${{ github.event.inputs.tag }}" --pattern "SecureVault.exe" -D packaging\staging --clobber
-          (Get-AuthenticodeSignature "packaging\staging\SecureVault.exe").Status
+          foreach ($exe in 'SecureVault.exe', 'svhost.exe') {
+            gh release download "${{ github.event.inputs.tag }}" --pattern $exe -D packaging\staging --clobber
+            $sig = Get-AuthenticodeSignature "packaging\staging\$exe"
+            "$exe -> $($sig.Status)"
+            if ($sig.Status -ne 'Valid') {
+              throw "$exe is not validly signed ($($sig.Status)) - refusing to package it."
+            }
+          }
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Install Inno Setup
