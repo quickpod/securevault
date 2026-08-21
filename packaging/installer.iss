@@ -23,18 +23,24 @@ DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\SecureVault.exe
-; NOTE - unins000.exe is UNSIGNED, and on a machine with Smart App Control
-; or a WDAC policy enforcing, Windows refuses to load it: the Uninstall
-; button in Settings fails with CodeIntegrity 3077/3033 and WinError 4551,
-; leaving the app impossible to remove through the normal route.
-; SignedUninstaller=yes is the proper fix, but it needs a [SignTool]
-; available where ISCC runs, and this project signs OFF-CI on purpose so
-; the certificate never reaches GitHub - setting it here would just break
-; the package job. Two real options, pick one deliberately:
-;   a) move the ISCC step onto the signing machine and turn this on;
-;   b) leave it, and treat uninstall.ps1 as the supported uninstall path
-;      on hardened machines - it needs no signed binary.
-; Until then uninstall.ps1 is the documented fallback.
+; unins000.exe used to ship UNSIGNED, and on a machine with Smart App Control
+; or a WDAC policy enforcing, Windows refuses to load it: the Uninstall button
+; in Settings fails with CodeIntegrity 3077/3033 and WinError 4551, leaving the
+; app impossible to remove through the normal route.
+;
+; Option (a) from the 1.0.15 note was taken on 2026-08-21: the ISCC step moved
+; onto the signing machine, so a SignTool that can reach the EV token now
+; exists where the compile happens. ISCC signs the uninstaller at COMPILE time
+; and embeds it — which is the only moment it can be signed, because Inno
+; otherwise writes it on the user's machine at install time.
+;
+; Guarded by #ifdef so the same .iss still compiles anywhere without the token
+; (CI, a laptop) — just unsigned. publish/scripts/compile-windows-installer.sh
+; passes /DSIGNED_UNINSTALLER and defines the "quickopen" SignTool.
+#ifdef SIGNED_UNINSTALLER
+SignTool=quickopen
+SignedUninstaller=yes
+#endif
 OutputDir=dist
 OutputBaseFilename=SecureVault-Setup
 SetupIconFile=..\securevault.ico
