@@ -236,8 +236,16 @@ class App(tk.Tk):
         # tray-menu intents (Open/Lock/Quit) arrive via a queue; drain on Tk
         if self.tray is not None:
             self.after(300, self._tray_events)
-            if self.tray._started:
-                self._tray_state()         # process was already trayed once
+            # Assert the unlocked state UNCONDITIONALLY. This used to be gated
+            # on tray._started, so on an ordinary launch (no --locked autostart,
+            # nothing trayed yet) it never ran and the Tray object still held
+            # _unlocked=False for the whole unlocked session. Consequences:
+            # start() later built the CLOSED-padlock image, the tooltip read
+            # "locked", and the "Lock now" menu item - enabled=lambda: _unlocked
+            # - stayed greyed out on an unlocked vault. set_state() is safe
+            # before the icon exists; it just records the state that a later
+            # start() reads.
+            self._tray_state()
         # SYSTEM auto-lock triggers (1.0.9, owner field feedback: the vault
         # must never lock mid-work). Primary: desktop lock / screensaver /
         # suspend, watched by svlock.Monitor on its own thread and marshalled
@@ -1198,6 +1206,10 @@ class App(tk.Tk):
 
     def _show_from_tray(self):
         self._trayed = False
+        # Re-assert: the window only exists while the vault is unlocked, so
+        # anything that showed it means unlocked, and the icon/tooltip/menu
+        # must agree even if some earlier path left them stale.
+        self._tray_state()
         try:
             self.deiconify()
             self.lift()
