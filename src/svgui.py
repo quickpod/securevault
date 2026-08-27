@@ -1298,11 +1298,43 @@ class App(tk.Tk):
         if self.tray is not None:
             self.tray.set_state(False)
 
+    # 1.0.16 (Quick OS laptop sweep 2026-08-27): every `after` this window
+    # schedules is remembered and cancelled in destroy(). The tray-event and
+    # auto-lock ticks re-arm themselves every 250 ms / 30 s; when the window
+    # was destroyed (lock-to-tray, quit, vault switch) their pending timers
+    # still fired in the interpreter and hit the deleted Tcl commands --
+    # `invalid command name "..._tray_events"` in the journal after every
+    # resume. Fired timers drop out of the set, so it never grows.
+    def after(self, ms, func=None, *args):
+        if func is None:
+            return super().after(ms)
+        ids = self.__dict__.setdefault("_after_ids", set())
+        holder = []
+
+        def _run():
+            if holder:
+                ids.discard(holder[0])
+            return func(*args)
+        aid = super().after(ms, _run)
+        holder.append(aid)
+        ids.add(aid)
+        return aid
+
+    def _cancel_afters(self):
+        ids = self.__dict__.get("_after_ids") or set()
+        for aid in list(ids):
+            try:
+                super().after_cancel(aid)
+            except Exception:
+                pass
+        ids.clear()
+
     def destroy(self):
         """Every exit path (lock, quit, close, vault switch) funnels through
         Tk destroy - stop the system-lock monitor with the window so a
         LOCKED process never keeps DBus/message-pump watchers alive (there is
         nothing left for them to lock; the next unlock starts fresh ones)."""
+        self._cancel_afters()
         mon = getattr(self, "_sysmon", None)
         if mon is not None:
             self._sysmon = None
